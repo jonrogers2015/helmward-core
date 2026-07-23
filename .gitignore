@@ -1,0 +1,33 @@
+# secrets & env
+.env
+.env.*
+*.token
+*.pem
+*.key
+helmward-gtm-plan.md
+
+# runtime data — not code
+data/
+*.db
+*.db-journal
+*.sqlite
+nats-data/
+
+# backups from the 7/22 patch session
+*.bak
+
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# logs
+*.log
+
+# broader safety nets
+data-test/
+*.db-shm
+*.db-wal
+*.bak*
+seed-data.*.sql

@@ -1,0 +1,446 @@
+"""
+The always-on dispatch loop + result/event consumers + timeout sweeper.
+
+These run as asyncio background tasks started on app startup. This is the "Claude is not a
+daemon" piece: the orchestration loop lives here, in the control plane.
+
+State machine handled here (broker-side redelivery is handled by JetStream ack_wait):
+    queued -> assigned -> running -> verifying -> done | failed
+              ^                                      |
+              +------ requeue (sweeper) -------------+   (attempts < max_attempts)
+              attempts == max_attempts -> failed (dead-letter)
+
+    'verifying' is a new state: an agent claimed done, but the task had a
+    verification_spec, so a fresh probe task (see verification_sweeper) confirms
+    the claim before it's allowed to become 'done'.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import traceback
+from datetime import datetime, timezone
+
+from . import db
+from .nats_client import NatsClient
+
+DISPATCH_INTERVAL = float(os.environ.get("DISPATCH_INTERVAL", "2"))
+TASK_TIMEOUT = float(os.environ.get("TASK_TIMEOUT", "120"))
+SWEEP_INTERVAL = float(os.environ.get("SWEEP_INTERVAL", "10"))
+
+# Capabilities served by PULL-based HTTP workers (e.g. the real Hermes/Apex agent on CT201).
+# Tasks with these capabilities are NEVER auto-assigned or pushed to NATS by the dispatch
+# loop -- they stay 'queued' until an HTTP worker claims them via POST /api/work/claim.
+# Everything else keeps the existing NATS push behavior.
+PULL_CAPABILITIES = {
+    c.strip() for c in os.environ.get("PULL_CAPABILITIES", "apex-real").split(",") if c.strip()
+}
+
+_HEARTBEAT_STALE = 30.0  # seconds without a heartbeat => treat agent as offline
+
+# Standard `ls -l` line: permission bits, link count, owner, group, SIZE, month, day...
+# Captures the size as group 1, wherever this pattern appears in the string -- robust to
+# agents that wrap raw command output in JSON/markdown despite being told not to (observed
+# in practice: Apex/Hermes routinely narrates or reformats output rather than returning it
+# verbatim, so a fixed word-position parse is too brittle).
+_LS_LINE_RE = re.compile(
+    r'^[-dlcbps][-rwxsStT]{9}\+?\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\w+\s+\d+',
+    re.MULTILINE,
+)
+
+
+def _parse_iso(ts: str | None):
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _age_seconds(ts: str | None) -> float:
+    dt = _parse_iso(ts)
+    if dt is None:
+        return 0.0
+    return (datetime.now(timezone.utc) - dt).total_seconds()
+
+
+def _agent_caps(agent: dict) -> list[str]:
+    raw = agent.get("capabilities")
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, list) else [str(val)]
+    except (ValueError, TypeError):
+        return [c.strip() for c in str(raw).split(",") if c.strip()]
+
+
+def _pick_agent(capability: str) -> dict | None:
+    """First online agent that advertises the capability and is under its concurrency limit."""
+    for agent in db.list_agents():
+        if agent.get("status") != "online":
+            continue
+        if (agent.get("transport") or "") == "pull":
+            continue  # HTTP pull worker -- cannot hear NATS pushes; leave its tasks queued for claim
+        if capability not in _agent_caps(agent):
+            continue
+        if db.count_agent_active_tasks(agent["agent_id"]) >= (agent.get("concurrency_limit") or 1):
+            continue
+        return agent
+    return None
+
+
+# --------------------------------------------------------------------- dispatch loop
+async def dispatch_loop(nc: NatsClient, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            for task in db.list_tasks_by_status("queued"):
+                capability = task.get("capability") or "general"
+                # PULL capabilities are owned by HTTP claim/complete -- never push to NATS.
+                if capability in PULL_CAPABILITIES:
+                    continue
+                agent = _pick_agent(capability)
+                if agent is None:
+                    continue  # no capable agent right now; task stays queued
+                updated = db.assign_task(task["id"], agent["agent_id"])
+                if updated is None:
+                    continue  # already claimed (e.g. by an HTTP pull worker) -- don't push
+                db.set_agent_heartbeat(agent["agent_id"], current_task=task["id"])
+                await nc.publish_task(updated["capability"] or "general", updated)
+                db.add_event("control-plane", "assigned",
+                             f"task {task['id']} -> {agent['agent_id']}",
+                             task_id=task["id"], ref=f"agent:{agent['agent_id']}")
+        except Exception as exc:  # never let the loop die
+            db.add_event("control-plane", "error", f"dispatch_loop: {exc}")
+        await _sleep_or_stop(stop, DISPATCH_INTERVAL)
+
+
+# ------------------------------------------------------------------ results consumer
+async def handle_result(data: dict) -> None:
+    """data = {task_id, status: done|failed, result?, error?, agent_id?}
+
+    Mirrors work_complete()'s verification-aware logic in api.py -- this was a
+    real gap found in production: a task dispatched via the NATS push path
+    (any capability NOT in PULL_CAPABILITIES) that carried a verification_spec
+    was being marked 'done' purely on the agent's own claim, with the
+    verification gate never actually running. work_complete() (the HTTP pull
+    path) already checked for verification_spec before trusting a result;
+    this consumer did not, which meant the push path's tasks bypassed
+    verification entirely -- exactly the fabrication risk the whole gate
+    exists to catch. Confirmed in practice: a general-capability task with a
+    verification_spec attached went to 'done' with verification_result still
+    NULL, and the returned disk info didn't match ground truth at all.
+    """
+    task_id = data.get("task_id")
+    if not task_id:
+        return
+    task = db.get_task(task_id)
+    if task is None:
+        db.add_event("control-plane", "error",
+                     f"handle_result: unknown task {task_id}", task_id=task_id)
+        return
+    status = data.get("status", "done")
+    agent_id = data.get("agent_id")
+    if status == "failed":
+        db.fail_task(task_id, str(data.get("error", "worker reported failure")))
+        db.add_event(f"agent:{agent_id}" if agent_id else "worker", "error",
+                     f"task {task_id} failed", task_id=task_id)
+    else:
+        result_text = data.get("result", "")
+        if task.get("verification_spec"):
+            # Agent claims success, but this task requires independent proof.
+            # Don't trust it yet -- park the claimed result and let
+            # verification_sweeper run the actual check. Same logic as
+            # work_complete() in api.py; this consumer must not diverge from it.
+            db.set_task_verifying(task_id, result_text)
+            db.add_event(f"agent:{agent_id}" if agent_id else "worker", "verifying",
+                         f"task {task_id} claimed done, awaiting verification",
+                         task_id=task_id)
+        else:
+            db.complete_task(task_id, result_text)
+            db.add_event(f"agent:{agent_id}" if agent_id else "worker", "result",
+                         f"task {task_id} done", task_id=task_id)
+    if agent_id:
+        db.set_agent_heartbeat(agent_id, current_task=None)
+
+
+# ------------------------------------------------------------------- events consumer
+async def handle_event(data: dict) -> None:
+    """
+    Heartbeats and agent events. data = {agent_id, type, message?, ref?, status?,
+    current_task?}. A heartbeat refreshes last_heartbeat (and optionally status).
+    """
+    agent_id = data.get("agent_id")
+    etype = data.get("type", "heartbeat")
+    if agent_id:
+        status = data.get("status")  # may be None -> unchanged
+        current = data.get("current_task", "__keep__")
+        # only update agents we know about; unknown agents must register first
+        if db.get_agent(agent_id) is not None:
+            db.set_agent_heartbeat(agent_id, status=status, current_task=current)
+    if etype != "heartbeat":
+        db.add_event(f"agent:{agent_id}" if agent_id else "agent", etype,
+                     str(data.get("message", "")), task_id=data.get("task_id"),
+                     ref=data.get("ref"))
+
+
+# ----------------------------------------------------------------------- sweeper
+async def timeout_sweeper(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            # mark agents offline if their heartbeat is stale
+            for agent in db.list_agents():
+                if agent.get("status") == "online" and \
+                        _age_seconds(agent.get("last_heartbeat")) > _HEARTBEAT_STALE:
+                    db.set_agent_heartbeat(agent["agent_id"], status="offline")
+                    db.add_event("control-plane", "agent_offline",
+                                 f"{agent['agent_id']} heartbeat stale",
+                                 ref=f"agent:{agent['agent_id']}")
+            # requeue or dead-letter stuck tasks. This is transport-agnostic: a PULL
+            # (apex-real) task stuck in 'running' is requeued the same way -- it just goes
+            # back to 'queued' for re-claim via /api/work/claim (no NATS involved), since
+            # the dispatch loop skips PULL_CAPABILITIES.
+            for status in ("assigned", "running"):
+                for task in db.list_tasks_by_status(status):
+                    if _age_seconds(task.get("updated_at")) <= TASK_TIMEOUT:
+                        continue
+                    if (task.get("attempts") or 0) < (task.get("max_attempts") or 3):
+                        db.requeue_task(task["id"])
+                        db.add_event("control-plane", "retry",
+                                     f"task {task['id']} timed out -> requeued "
+                                     f"(attempt {task.get('attempts')})", task_id=task["id"])
+                    else:
+                        db.fail_task(task["id"], "max_attempts exceeded (dead-letter)")
+                        db.add_event("control-plane", "dead_letter",
+                                     f"task {task['id']} dead-lettered", task_id=task["id"])
+        except Exception as exc:
+            db.add_event("control-plane", "error", f"sweeper: {exc}")
+        await _sleep_or_stop(stop, SWEEP_INTERVAL)
+
+
+# ------------------------------------------------------------- verification sweeper
+def _build_raw_command(spec: dict) -> str:
+    """Turn a verification_spec into a literal shell command -- executed directly
+    by the worker with NO model in the loop. This is deliberate: an earlier version
+    of this function generated a natural-language probe prompt ("Run this exact
+    single command and return only its raw output: ...") and fed it back through
+    the same LLM (hermes -z ... --yolo) that produced the original claim. That
+    inherited the exact tool-use reliability gap it was meant to catch -- the model
+    could (and in testing, did) hallucinate a plausible-looking `ls` failure for a
+    file that genuinely existed, producing a false verification failure on real,
+    successful work. A raw shell command has nothing to fabricate: it either runs
+    and returns real output, or it doesn't run at all.
+    """
+    t = spec.get("type")
+    if t == "file_exists":
+        path = spec["path"]
+        return f"ls -la {path}"
+    if t == "file_checksum":
+        # Independent hash check -- confirms exact byte-for-byte content,
+        # not just presence/size like file_exists. Built specifically for
+        # verifying file writes dispatched via a literal raw_command (see
+        # write_file in the MCP bridge): since nothing generates the
+        # expected hash except the caller's own pre-computed value, there's
+        # no path for a fabricated write to accidentally pass this check.
+        path = spec["path"]
+        return f"sha256sum {path} 2>&1"
+    if t == "command_output_contains":
+        return spec["command"]
+    if t == "agent_result_matches_probe":
+        # Same probe path as command_output_contains -- the difference is entirely
+        # in how the result gets evaluated (see _evaluate_probe_result below), not
+        # in how the ground truth is collected.
+        return spec["command"]
+    if t == "command_exit_code":
+        cmd = spec["command"]
+        return f"{cmd}; echo PROBE_EXIT_CODE:$?"
+    raise ValueError(f"unknown verification_spec type: {t!r}")
+
+
+def _evaluate_probe_result(spec: dict, raw_output: str, agent_result: str = "") -> tuple[bool, str]:
+    """Interpret the probe's raw output against the spec. Returns (passed, detail).
+
+    agent_result is the original task's claimed result -- only used by
+    agent_result_matches_probe, which is the one type that checks the agent's
+    claim against ground truth rather than just checking ground truth in isolation.
+    """
+    t = spec.get("type")
+    raw_output = raw_output or ""
+
+    if t == "file_exists":
+        path = spec.get("path", "")
+        if "No such file or directory" in raw_output or "cannot access" in raw_output:
+            return False, f"file not found at {path}: {raw_output.strip()}"
+        min_bytes = spec.get("min_bytes")
+        if min_bytes:
+            match = _LS_LINE_RE.search(raw_output)
+            if not match:
+                return False, f"could not parse file size from probe output: {raw_output.strip()}"
+            size = int(match.group(1))
+            if size < min_bytes:
+                return False, f"file exists but is smaller than expected ({size} < {min_bytes} bytes)"
+        return True, f"confirmed via probe: {raw_output.strip()}"
+
+    if t == "file_checksum":
+        path = spec.get("path", "")
+        if "No such file or directory" in raw_output or "cannot access" in raw_output:
+            return False, f"file not found for checksum at {path}: {raw_output.strip()}"
+        expected = (spec.get("sha256") or "").strip().lower()
+        # sha256sum output format: "<hash>  <filename>"
+        parts = raw_output.strip().split()
+        actual = parts[0].lower() if parts else ""
+        if not expected:
+            return False, "file_checksum spec is missing 'sha256'"
+        if actual == expected:
+            return True, f"checksum confirmed: {actual}"
+        return False, (
+            f"checksum mismatch at {path}: expected {expected}, "
+            f"got {actual!r} (raw probe output: {raw_output.strip()!r})"
+        )
+
+    if t == "command_output_contains":
+        expected = spec.get("expected", "")
+        if expected in raw_output:
+            return True, f"probe output contained expected string: {raw_output.strip()}"
+        return False, f"expected {expected!r} not found in probe output: {raw_output.strip()}"
+
+    if t == "agent_result_matches_probe":
+        # Ground truth (raw_output) is trustworthy -- it's a direct shell probe with
+        # no model in the loop. What's under test here is whether the AGENT's claimed
+        # result actually matches that ground truth, catching the case where a
+        # substring check like command_output_contains would false-pass a fabricated
+        # answer that happens to contain the expected token (e.g. a fake `df` table
+        # still contains a "/" character).
+        match_strategy = spec.get("match", "exact_string")
+        agent_result = (agent_result or "").strip()
+        probe_clean = raw_output.strip()
+
+        if match_strategy == "exact_string":
+            if agent_result == probe_clean:
+                return True, f"match confirmed: {probe_clean}"
+            return False, f"probe: {probe_clean!r} | agent claimed: {agent_result!r}"
+
+        if match_strategy == "exact_line_containing":
+            match_key = spec.get("match_key", "")
+            probe_line = next((l.strip() for l in raw_output.splitlines() if match_key in l), None)
+            if probe_line is None:
+                return False, f"probe output had no line containing {match_key!r}: {probe_clean!r}"
+            agent_line = next((l.strip() for l in agent_result.splitlines() if match_key in l), None)
+            if agent_line is None:
+                return False, (
+                    f"agent result had no line containing {match_key!r} | "
+                    f"probe: {probe_line!r} | agent full result: {agent_result!r}"
+                )
+            if agent_line == probe_line:
+                return True, f"match confirmed: {probe_line}"
+            return False, f"probe: {probe_line!r} | agent claimed: {agent_line!r}"
+
+        return False, f"unknown match strategy: {match_strategy!r}"
+
+    if t == "command_exit_code":
+        expected_code = spec.get("expected_exit_code", 0)
+        marker = f"PROBE_EXIT_CODE:{expected_code}"
+        if marker in raw_output:
+            return True, f"probe confirmed exit code {expected_code}"
+        return False, f"expected exit code {expected_code} not confirmed: {raw_output.strip()}"
+
+    return False, f"unknown verification_spec type: {t!r}"
+
+
+def _find_probe_task(parent_task_id: str) -> dict | None:
+    children = db.get_tasks_by_parent(parent_task_id)
+    return children[0] if children else None  # most recent first (created_at DESC)
+
+
+async def verification_sweeper(stop: asyncio.Event) -> None:
+    """
+    Resolves tasks sitting in 'verifying' status. Design: reuse the existing
+    task queue/claim/complete pipeline to run a fresh probe task rather than
+    trusting the original claim. The probe is a completely separate task
+    (linked via parent_id), dispatched through the normal pipeline, so it goes
+    through the same claim/complete cycle as any other task.
+
+    The probe's payload carries a literal `raw_command` rather than a `prompt` --
+    the worker (see agentos-poller.sh) runs this directly via the shell instead
+    of routing it through the LLM. This is what makes verification actually
+    independent of the original agent's claim: there is no model call in the
+    probe path at all, so there's nothing left to fabricate.
+    """
+    while not stop.is_set():
+        try:
+            for task in db.list_tasks_by_status("verifying"):
+                try:
+                    spec_raw = task.get("verification_spec")
+                    if not spec_raw:
+                        db.resolve_verification(task["id"], False,
+                                                "task in verifying state with no verification_spec")
+                        continue
+                    try:
+                        spec = json.loads(spec_raw)
+                    except (ValueError, TypeError):
+                        db.resolve_verification(task["id"], False,
+                                                f"could not parse verification_spec: {spec_raw}")
+                        continue
+
+                    probe = _find_probe_task(task["id"])
+
+                    if probe is None:
+                        raw_cmd = _build_raw_command(spec)
+                        db.create_task(
+                            capability=task.get("capability") or "general",
+                            payload={"raw_command": raw_cmd},
+                            max_attempts=1,
+                            parent_id=task["id"],
+                        )
+                        continue
+
+                    if probe.get("status") in ("queued", "assigned", "running"):
+                        if _age_seconds(task.get("updated_at")) > TASK_TIMEOUT:
+                            db.resolve_verification(task["id"], False,
+                                                    "verification probe did not complete in time")
+                        continue
+
+                    if probe.get("status") == "failed":
+                        db.resolve_verification(task["id"], False,
+                                                f"verification probe itself failed: {probe.get('error')}")
+                        continue
+
+                    passed, detail = _evaluate_probe_result(
+                        spec, probe.get("result") or "", task.get("result") or ""
+                    )
+                    db.resolve_verification(task["id"], passed, detail)
+
+                except Exception as task_exc:
+                    print(f"verification_sweeper ERROR on task {task.get('id')}: {task_exc}\n{traceback.format_exc()}", flush=True)
+                    db.add_event("control-plane", "error",
+                                 f"verification_sweeper task {task.get('id')}: {task_exc}")
+
+        except Exception as exc:  # never let the loop die
+            print(f"verification_sweeper LOOP ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+            db.add_event("control-plane", "error", f"verification_sweeper: {exc}")
+        await _sleep_or_stop(stop, SWEEP_INTERVAL)
+
+
+async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+
+
+# --------------------------------------------------------------- lifecycle helpers
+async def start_background_tasks(nc: NatsClient) -> tuple[asyncio.Event, list]:
+    """Subscribe consumers and launch the loops. Returns (stop_event, tasks)."""
+    stop = asyncio.Event()
+    await nc.subscribe_results(handle_result)
+    await nc.subscribe_events(handle_event)
+    tasks = [
+        asyncio.create_task(dispatch_loop(nc, stop)),
+        asyncio.create_task(timeout_sweeper(stop)),
+        asyncio.create_task(verification_sweeper(stop)),
+    ]
+    db.add_event("control-plane", "started", "dispatch loop + consumers online")
+    return stop, tasks
