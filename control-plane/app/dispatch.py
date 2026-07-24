@@ -24,6 +24,10 @@ import traceback
 from datetime import datetime, timezone
 
 from . import db
+from .verification import (  # pure verification logic; no I/O
+    build_raw_command as _build_raw_command,
+    evaluate_probe_result as _evaluate_probe_result,
+)
 
 DISPATCH_INTERVAL = float(os.environ.get("DISPATCH_INTERVAL", "2"))
 TASK_TIMEOUT = float(os.environ.get("TASK_TIMEOUT", "120"))
@@ -93,134 +97,6 @@ async def timeout_sweeper(stop: asyncio.Event) -> None:
 
 
 # ------------------------------------------------------------- verification sweeper
-def _build_raw_command(spec: dict) -> str:
-    """Turn a verification_spec into a literal shell command -- executed directly
-    by the worker with NO model in the loop. This is deliberate: an earlier version
-    of this function generated a natural-language probe prompt ("Run this exact
-    single command and return only its raw output: ...") and fed it back through
-    the same LLM (hermes -z ... --yolo) that produced the original claim. That
-    inherited the exact tool-use reliability gap it was meant to catch -- the model
-    could (and in testing, did) hallucinate a plausible-looking `ls` failure for a
-    file that genuinely existed, producing a false verification failure on real,
-    successful work. A raw shell command has nothing to fabricate: it either runs
-    and returns real output, or it doesn't run at all.
-    """
-    t = spec.get("type")
-    if t == "file_exists":
-        path = spec["path"]
-        return f"ls -la {path}"
-    if t == "file_checksum":
-        # Independent hash check -- confirms exact byte-for-byte content,
-        # not just presence/size like file_exists. Built specifically for
-        # verifying file writes dispatched via a literal raw_command (see
-        # write_file in the MCP bridge): since nothing generates the
-        # expected hash except the caller's own pre-computed value, there's
-        # no path for a fabricated write to accidentally pass this check.
-        path = spec["path"]
-        return f"sha256sum {path} 2>&1"
-    if t == "command_output_contains":
-        return spec["command"]
-    if t == "agent_result_matches_probe":
-        # Same probe path as command_output_contains -- the difference is entirely
-        # in how the result gets evaluated (see _evaluate_probe_result below), not
-        # in how the ground truth is collected.
-        return spec["command"]
-    if t == "command_exit_code":
-        cmd = spec["command"]
-        return f"{cmd}; echo PROBE_EXIT_CODE:$?"
-    raise ValueError(f"unknown verification_spec type: {t!r}")
-
-
-def _evaluate_probe_result(spec: dict, raw_output: str, agent_result: str = "") -> tuple[bool, str]:
-    """Interpret the probe's raw output against the spec. Returns (passed, detail).
-
-    agent_result is the original task's claimed result -- only used by
-    agent_result_matches_probe, which is the one type that checks the agent's
-    claim against ground truth rather than just checking ground truth in isolation.
-    """
-    t = spec.get("type")
-    raw_output = raw_output or ""
-
-    if t == "file_exists":
-        path = spec.get("path", "")
-        if "No such file or directory" in raw_output or "cannot access" in raw_output:
-            return False, f"file not found at {path}: {raw_output.strip()}"
-        min_bytes = spec.get("min_bytes")
-        if min_bytes:
-            match = _LS_LINE_RE.search(raw_output)
-            if not match:
-                return False, f"could not parse file size from probe output: {raw_output.strip()}"
-            size = int(match.group(1))
-            if size < min_bytes:
-                return False, f"file exists but is smaller than expected ({size} < {min_bytes} bytes)"
-        return True, f"confirmed via probe: {raw_output.strip()}"
-
-    if t == "file_checksum":
-        path = spec.get("path", "")
-        if "No such file or directory" in raw_output or "cannot access" in raw_output:
-            return False, f"file not found for checksum at {path}: {raw_output.strip()}"
-        expected = (spec.get("sha256") or "").strip().lower()
-        # sha256sum output format: "<hash>  <filename>"
-        parts = raw_output.strip().split()
-        actual = parts[0].lower() if parts else ""
-        if not expected:
-            return False, "file_checksum spec is missing 'sha256'"
-        if actual == expected:
-            return True, f"checksum confirmed: {actual}"
-        return False, (
-            f"checksum mismatch at {path}: expected {expected}, "
-            f"got {actual!r} (raw probe output: {raw_output.strip()!r})"
-        )
-
-    if t == "command_output_contains":
-        expected = spec.get("expected", "")
-        if expected in raw_output:
-            return True, f"probe output contained expected string: {raw_output.strip()}"
-        return False, f"expected {expected!r} not found in probe output: {raw_output.strip()}"
-
-    if t == "agent_result_matches_probe":
-        # Ground truth (raw_output) is trustworthy -- it's a direct shell probe with
-        # no model in the loop. What's under test here is whether the AGENT's claimed
-        # result actually matches that ground truth, catching the case where a
-        # substring check like command_output_contains would false-pass a fabricated
-        # answer that happens to contain the expected token (e.g. a fake `df` table
-        # still contains a "/" character).
-        match_strategy = spec.get("match", "exact_string")
-        agent_result = (agent_result or "").strip()
-        probe_clean = raw_output.strip()
-
-        if match_strategy == "exact_string":
-            if agent_result == probe_clean:
-                return True, f"match confirmed: {probe_clean}"
-            return False, f"probe: {probe_clean!r} | agent claimed: {agent_result!r}"
-
-        if match_strategy == "exact_line_containing":
-            match_key = spec.get("match_key", "")
-            probe_line = next((l.strip() for l in raw_output.splitlines() if match_key in l), None)
-            if probe_line is None:
-                return False, f"probe output had no line containing {match_key!r}: {probe_clean!r}"
-            agent_line = next((l.strip() for l in agent_result.splitlines() if match_key in l), None)
-            if agent_line is None:
-                return False, (
-                    f"agent result had no line containing {match_key!r} | "
-                    f"probe: {probe_line!r} | agent full result: {agent_result!r}"
-                )
-            if agent_line == probe_line:
-                return True, f"match confirmed: {probe_line}"
-            return False, f"probe: {probe_line!r} | agent claimed: {agent_line!r}"
-
-        return False, f"unknown match strategy: {match_strategy!r}"
-
-    if t == "command_exit_code":
-        expected_code = spec.get("expected_exit_code", 0)
-        marker = f"PROBE_EXIT_CODE:{expected_code}"
-        if marker in raw_output:
-            return True, f"probe confirmed exit code {expected_code}"
-        return False, f"expected exit code {expected_code} not confirmed: {raw_output.strip()}"
-
-    return False, f"unknown verification_spec type: {t!r}"
-
-
 def _find_probe_task(parent_task_id: str) -> dict | None:
     children = db.get_tasks_by_parent(parent_task_id)
     return children[0] if children else None  # most recent first (created_at DESC)

@@ -204,7 +204,10 @@ def _check_worker_token(token: str | None) -> None:
 
 
 # ----------------------------------------------------------------------------- tasks
-_SUPPORTED_VERIFICATION_TYPES = {"file_exists", "command_output_contains", "command_exit_code", "agent_result_matches_probe", "file_checksum"}
+from .verification import (  # single source of truth for spec shape
+    SUPPORTED_TYPES as _SUPPORTED_VERIFICATION_TYPES,
+    validate_spec as _validate_verification_spec,
+)
 
 @router.post("/api/tasks")
 def create_task(task_in: TaskIn):
@@ -212,13 +215,11 @@ def create_task(task_in: TaskIn):
         try:
             spec = task_in.verification_spec if isinstance(task_in.verification_spec, dict) \
                 else json.loads(task_in.verification_spec)
-            spec_type = spec.get("type")
-            if spec_type not in _SUPPORTED_VERIFICATION_TYPES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"unsupported verification_spec type {spec_type!r}; "
-                           f"must be one of {sorted(_SUPPORTED_VERIFICATION_TYPES)}"
-                )
+            # Validate the whole spec, not just its type: required keys
+            # present and non-empty, no unknown keys (a misspelled key would
+            # silently change what gets checked), value types sane. SpecError
+            # subclasses ValueError, so the handler below turns it into a 400.
+            _validate_verification_spec(spec)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=f"invalid verification_spec: {exc}")
     task = db.create_task(
