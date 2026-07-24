@@ -24,19 +24,10 @@ import traceback
 from datetime import datetime, timezone
 
 from . import db
-from .nats_client import NatsClient
 
 DISPATCH_INTERVAL = float(os.environ.get("DISPATCH_INTERVAL", "2"))
 TASK_TIMEOUT = float(os.environ.get("TASK_TIMEOUT", "120"))
 SWEEP_INTERVAL = float(os.environ.get("SWEEP_INTERVAL", "10"))
-
-# Capabilities served by PULL-based HTTP workers (e.g. the real Hermes/Apex agent on CT201).
-# Tasks with these capabilities are NEVER auto-assigned or pushed to NATS by the dispatch
-# loop -- they stay 'queued' until an HTTP worker claims them via POST /api/work/claim.
-# Everything else keeps the existing NATS push behavior.
-PULL_CAPABILITIES = {
-    c.strip() for c in os.environ.get("PULL_CAPABILITIES", "apex-real").split(",") if c.strip()
-}
 
 _HEARTBEAT_STALE = 30.0  # seconds without a heartbeat => treat agent as offline
 
@@ -65,126 +56,6 @@ def _age_seconds(ts: str | None) -> float:
     if dt is None:
         return 0.0
     return (datetime.now(timezone.utc) - dt).total_seconds()
-
-
-def _agent_caps(agent: dict) -> list[str]:
-    raw = agent.get("capabilities")
-    if not raw:
-        return []
-    try:
-        val = json.loads(raw)
-        return val if isinstance(val, list) else [str(val)]
-    except (ValueError, TypeError):
-        return [c.strip() for c in str(raw).split(",") if c.strip()]
-
-
-def _pick_agent(capability: str) -> dict | None:
-    """First online agent that advertises the capability and is under its concurrency limit."""
-    for agent in db.list_agents():
-        if agent.get("status") != "online":
-            continue
-        if (agent.get("transport") or "") == "pull":
-            continue  # HTTP pull worker -- cannot hear NATS pushes; leave its tasks queued for claim
-        if capability not in _agent_caps(agent):
-            continue
-        if db.count_agent_active_tasks(agent["agent_id"]) >= (agent.get("concurrency_limit") or 1):
-            continue
-        return agent
-    return None
-
-
-# --------------------------------------------------------------------- dispatch loop
-async def dispatch_loop(nc: NatsClient, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        try:
-            for task in db.list_tasks_by_status("queued"):
-                capability = task.get("capability") or "general"
-                # PULL capabilities are owned by HTTP claim/complete -- never push to NATS.
-                if capability in PULL_CAPABILITIES:
-                    continue
-                agent = _pick_agent(capability)
-                if agent is None:
-                    continue  # no capable agent right now; task stays queued
-                updated = db.assign_task(task["id"], agent["agent_id"])
-                if updated is None:
-                    continue  # already claimed (e.g. by an HTTP pull worker) -- don't push
-                db.set_agent_heartbeat(agent["agent_id"], current_task=task["id"])
-                await nc.publish_task(updated["capability"] or "general", updated)
-                db.add_event("control-plane", "assigned",
-                             f"task {task['id']} -> {agent['agent_id']}",
-                             task_id=task["id"], ref=f"agent:{agent['agent_id']}")
-        except Exception as exc:  # never let the loop die
-            db.add_event("control-plane", "error", f"dispatch_loop: {exc}")
-        await _sleep_or_stop(stop, DISPATCH_INTERVAL)
-
-
-# ------------------------------------------------------------------ results consumer
-async def handle_result(data: dict) -> None:
-    """data = {task_id, status: done|failed, result?, error?, agent_id?}
-
-    Mirrors work_complete()'s verification-aware logic in api.py -- this was a
-    real gap found in production: a task dispatched via the NATS push path
-    (any capability NOT in PULL_CAPABILITIES) that carried a verification_spec
-    was being marked 'done' purely on the agent's own claim, with the
-    verification gate never actually running. work_complete() (the HTTP pull
-    path) already checked for verification_spec before trusting a result;
-    this consumer did not, which meant the push path's tasks bypassed
-    verification entirely -- exactly the fabrication risk the whole gate
-    exists to catch. Confirmed in practice: a general-capability task with a
-    verification_spec attached went to 'done' with verification_result still
-    NULL, and the returned disk info didn't match ground truth at all.
-    """
-    task_id = data.get("task_id")
-    if not task_id:
-        return
-    task = db.get_task(task_id)
-    if task is None:
-        db.add_event("control-plane", "error",
-                     f"handle_result: unknown task {task_id}", task_id=task_id)
-        return
-    status = data.get("status", "done")
-    agent_id = data.get("agent_id")
-    if status == "failed":
-        db.fail_task(task_id, str(data.get("error", "worker reported failure")))
-        db.add_event(f"agent:{agent_id}" if agent_id else "worker", "error",
-                     f"task {task_id} failed", task_id=task_id)
-    else:
-        result_text = data.get("result", "")
-        if task.get("verification_spec"):
-            # Agent claims success, but this task requires independent proof.
-            # Don't trust it yet -- park the claimed result and let
-            # verification_sweeper run the actual check. Same logic as
-            # work_complete() in api.py; this consumer must not diverge from it.
-            db.set_task_verifying(task_id, result_text)
-            db.add_event(f"agent:{agent_id}" if agent_id else "worker", "verifying",
-                         f"task {task_id} claimed done, awaiting verification",
-                         task_id=task_id)
-        else:
-            db.complete_task(task_id, result_text)
-            db.add_event(f"agent:{agent_id}" if agent_id else "worker", "result",
-                         f"task {task_id} done", task_id=task_id)
-    if agent_id:
-        db.set_agent_heartbeat(agent_id, current_task=None)
-
-
-# ------------------------------------------------------------------- events consumer
-async def handle_event(data: dict) -> None:
-    """
-    Heartbeats and agent events. data = {agent_id, type, message?, ref?, status?,
-    current_task?}. A heartbeat refreshes last_heartbeat (and optionally status).
-    """
-    agent_id = data.get("agent_id")
-    etype = data.get("type", "heartbeat")
-    if agent_id:
-        status = data.get("status")  # may be None -> unchanged
-        current = data.get("current_task", "__keep__")
-        # only update agents we know about; unknown agents must register first
-        if db.get_agent(agent_id) is not None:
-            db.set_agent_heartbeat(agent_id, status=status, current_task=current)
-    if etype != "heartbeat":
-        db.add_event(f"agent:{agent_id}" if agent_id else "agent", etype,
-                     str(data.get("message", "")), task_id=data.get("task_id"),
-                     ref=data.get("ref"))
 
 
 # ----------------------------------------------------------------------- sweeper
@@ -432,15 +303,16 @@ async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
 
 
 # --------------------------------------------------------------- lifecycle helpers
-async def start_background_tasks(nc: NatsClient) -> tuple[asyncio.Event, list]:
-    """Subscribe consumers and launch the loops. Returns (stop_event, tasks)."""
+async def start_background_tasks() -> tuple[asyncio.Event, list]:
+    """Launch the background loops. Returns (stop_event, tasks).
+
+    Pull-only: no subscriptions, no dispatch loop. Tasks sit in 'queued' until
+    an HTTP worker claims them via POST /api/work/claim.
+    """
     stop = asyncio.Event()
-    await nc.subscribe_results(handle_result)
-    await nc.subscribe_events(handle_event)
     tasks = [
-        asyncio.create_task(dispatch_loop(nc, stop)),
         asyncio.create_task(timeout_sweeper(stop)),
         asyncio.create_task(verification_sweeper(stop)),
     ]
-    db.add_event("control-plane", "started", "dispatch loop + consumers online")
+    db.add_event("control-plane", "started", "sweepers online (pull-only)")
     return stop, tasks

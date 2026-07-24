@@ -6,13 +6,17 @@ well as probing the HTTP API, so it still reports something useful when the
 control plane won't start at all.
 
 Every check here corresponds to a failure that actually happened during the
-CT100 clean-install bring-up (2026-07-21/22). The one that matters most is
-`capability routing`: it catches the class of bug where an HTTP pull worker
-advertises a capability that is NOT in PULL_CAPABILITIES, so the dispatch
-loop pushes its tasks to a NATS subject nobody is subscribed to. Those tasks
-leave 'queued', burn an attempt, become unclaimable, and dead-letter --
-which, for verification probe children (max_attempts=1), silently and
-falsely fails the parent task.
+CT100 clean-install bring-up and the CT201 hardening that followed
+(2026-07-21 .. 2026-07-24).
+
+Architecture note: Helmward is PULL-ONLY as of 2026-07-24. Work is handed out
+exclusively through POST /api/work/claim. The NATS push path -- dispatch_loop,
+_pick_agent, PULL_CAPABILITIES, the results/events consumers -- was removed
+after `ss -tnp | grep 4222` showed a single connection consisting of the
+control plane talking to the bus with nothing subscribed on the far side.
+That dual-path design was the sole cause of the dispatch race in which an HTTP
+pull worker could be selected as a push target, taking its task out of
+'queued', burning an attempt, and dead-lettering it unclaimed.
 
 Usage:
     python3 tools/doctor.py
@@ -36,11 +40,6 @@ DB_PATH = os.environ.get("DB_PATH", "/opt/helmward/control-plane/data/agentos.db
 MCP_URL = os.environ.get("HELMWARD_MCP_URL", "http://127.0.0.1:8765").rstrip("/")
 NATS_HOST = os.environ.get("NATS_HOST", "127.0.0.1")
 NATS_PORT = int(os.environ.get("NATS_PORT", "4222"))
-PULL_CAPABILITIES = {
-    c.strip()
-    for c in os.environ.get("PULL_CAPABILITIES", "apex-real").split(",")
-    if c.strip()
-}
 HEARTBEAT_STALE = 30.0
 TASK_TIMEOUT = float(os.environ.get("TASK_TIMEOUT", "120"))
 
@@ -104,23 +103,12 @@ def tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
 section("config")
 emit("INFO", "control plane URL", CP_URL)
 emit("INFO", "database path", DB_PATH)
-emit("INFO", "PULL_CAPABILITIES", ", ".join(sorted(PULL_CAPABILITIES)) or "(empty)")
-if "PULL_CAPABILITIES" not in os.environ:
-    emit(
-        "INFO",
-        "PULL_CAPABILITIES source",
-        "not set in this shell's environment -- showing the code default.\n"
-        "If the control plane runs under systemd with a different value, this\n"
-        "check is comparing against the wrong set. Confirm with:\n"
-        "  systemctl show helmward-control-plane -p Environment",
-    )
+emit("INFO", "dispatch model", "pull-only (POST /api/work/claim); no message bus")
 
 # ---------------------------------------------------------------- control plane
 section("control plane")
-cp_up = False
 try:
     health = http_json(CP_URL + "/healthz")
-    cp_up = True
     emit("PASS", "HTTP reachable", "%s/healthz -> %s" % (CP_URL, health))
 except urllib.error.URLError as exc:
     emit(
@@ -150,17 +138,8 @@ if conn is not None:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()}
         if not cols:
             emit("FAIL", "agents table missing", "schema.sql may never have been applied")
-        elif "transport" in cols:
-            emit("PASS", "agents.transport present", "pull/push routing fix is in effect")
         else:
-            emit(
-                "WARN",
-                "agents.transport absent",
-                "Created lazily on the first /api/work/claim by a registered agent.\n"
-                "Absent means either no pull worker has claimed yet, or this install\n"
-                "predates the dispatch fix. If a pull worker HAS claimed and this is\n"
-                "still missing, the dispatch race is live -- see tools/doctor.py header.",
-            )
+            emit("PASS", "agents table present", "%d columns" % len(cols))
     except sqlite3.Error as exc:
         emit("FAIL", "schema check failed", str(exc))
 
@@ -176,51 +155,48 @@ if conn is not None:
 if not agents:
     emit("WARN", "no agents registered", "nothing will ever claim work")
 else:
+    live = 0
     for a in agents:
         aid = a.get("agent_id")
         caps = agent_caps(a.get("capabilities"))
-        transport = a.get("transport") or "(unknown)"
         hb = age_seconds(a.get("last_heartbeat"))
         hb_txt = "never" if hb is None else "%.0fs ago" % hb
+        if a.get("status") == "online":
+            live += 1
         emit(
             "INFO",
             aid,
-            "status=%s transport=%s heartbeat=%s caps=%s"
-            % (a.get("status"), transport, hb_txt, ",".join(caps) or "(none)"),
+            "status=%s heartbeat=%s caps=%s"
+            % (a.get("status"), hb_txt, ",".join(caps) or "(none)"),
         )
         if a.get("status") == "online" and hb is not None and hb > HEARTBEAT_STALE:
             emit(
                 "WARN",
                 "%s: stale heartbeat while marked online" % aid,
-                "%.0fs since last beat (stale threshold %.0fs). The sweeper should\n"
-                "flip this to offline; if it does not, the sweeper may not be running."
+                "%.0fs since last beat (stale threshold %.0fs). If your poller's\n"
+                "interval is close to the threshold this will flap; widen\n"
+                "_HEARTBEAT_STALE in dispatch.py rather than chasing it."
                 % (hb, HEARTBEAT_STALE),
             )
-
-# --------------------------------------------------------- capability routing
-section("capability routing")
-if not agents:
-    emit("INFO", "skipped", "no agents to check")
-else:
-    trouble = False
-    for a in agents:
-        aid = a.get("agent_id")
-        transport = (a.get("transport") or "").lower()
-        for cap in agent_caps(a.get("capabilities")):
-            if transport == "pull" and cap not in PULL_CAPABILITIES:
-                trouble = True
-                emit(
-                    "WARN",
-                    "%s: pull worker on non-pull capability %r" % (aid, cap),
-                    "The dispatch loop will consider this agent a NATS push target for\n"
-                    "%r tasks. With the transport fix in place _pick_agent skips it, so\n"
-                    "those tasks correctly stay queued -- but the capability is still\n"
-                    "misconfigured. Add it to PULL_CAPABILITIES:\n"
-                    "  PULL_CAPABILITIES=%s"
-                    % (cap, ",".join(sorted(PULL_CAPABILITIES | {cap}))),
-                )
-    if not trouble:
-        emit("PASS", "no pull/push capability mismatches")
+    if live == 0:
+        emit(
+            "WARN",
+            "no agents currently online",
+            "Every registered agent is offline. Queued work will sit unclaimed\n"
+            "until a poller comes back.",
+        )
+    stale_regs = [
+        a.get("agent_id")
+        for a in agents
+        if a.get("status") != "online" and (age_seconds(a.get("last_heartbeat")) or 0) > 86400
+    ]
+    if stale_regs:
+        emit(
+            "INFO",
+            "registrations idle >24h: %s" % ", ".join(stale_regs),
+            "Left over from retired agents. Harmless, but they clutter the roster;\n"
+            "DELETE /api/agents/<id> removes one.",
+        )
 
 # ---------------------------------------------------------------------- tasks
 section("tasks")
@@ -255,16 +231,18 @@ if conn is not None:
         else:
             emit("PASS", "no tasks past the timeout threshold")
 
-        orphan = conn.execute(
+        dl = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE status='failed' "
             "AND error LIKE '%dead-letter%'"
         ).fetchone()[0]
-        if orphan:
+        if dl:
             emit(
                 "INFO",
-                "dead-lettered tasks: %d" % orphan,
-                "Historical. Probe children dead-lettering at exactly max_attempts with\n"
-                "a null result is the signature of the pull/push dispatch bug.",
+                "dead-lettered tasks: %d" % dl,
+                "Mostly historical. Before the pull-only change, any capability not\n"
+                "listed in PULL_CAPABILITIES was pushed to a NATS subject with no\n"
+                "subscriber and died here. New dead-letters now mean a genuinely\n"
+                "unclaimed or repeatedly failing task -- worth investigating.",
             )
     except sqlite3.Error as exc:
         emit("FAIL", "task query failed", str(exc))
@@ -272,26 +250,19 @@ if conn is not None:
 # ------------------------------------------------------------------ transports
 section("transports")
 if tcp_open(NATS_HOST, NATS_PORT):
-    emit("PASS", "NATS reachable", "%s:%d" % (NATS_HOST, NATS_PORT))
-    subscribed = [
-        a.get("agent_id")
-        for a in agents
-        if (a.get("transport") or "").lower() != "pull"
-    ]
-    if not subscribed:
-        emit(
-            "INFO",
-            "no push-transport agents registered",
-            "Every registered agent claims over HTTP. The NATS push path is running\n"
-            "but nothing consumes it -- a candidate for removal.",
-        )
-else:
     emit(
         "WARN",
-        "NATS not reachable",
-        "%s:%d -- fine if every agent is an HTTP pull worker, fatal if any\n"
-        "agent expects pushed work." % (NATS_HOST, NATS_PORT),
+        "a message bus is listening on %s:%d" % (NATS_HOST, NATS_PORT),
+        "Helmward is pull-only and does not use it. Nothing publishes or\n"
+        "subscribes. Left running it is dead weight and a restart dependency\n"
+        "waiting to be reintroduced:\n"
+        "  systemctl stop helmward-nats && systemctl disable helmward-nats\n"
+        "Also confirm the control-plane unit does not carry\n"
+        "Requires=helmward-nats.service -- that both kills the control plane\n"
+        "when the bus stops and pulls the bus back up at boot despite disable.",
     )
+else:
+    emit("PASS", "no message bus running", "expected -- Helmward is pull-only")
 
 try:
     req = urllib.request.Request(MCP_URL + "/mcp", method="GET")

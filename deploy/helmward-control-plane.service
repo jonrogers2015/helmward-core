@@ -1,0 +1,22 @@
+[Unit]
+Description=Helmward Control Plane (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/helmward/control-plane
+Environment="DB_PATH=/opt/helmward/control-plane/data/agentos.db"
+Environment="SCHEMA_PATH=/opt/helmward/control-plane/schema.sql"
+Environment="TASK_TEMPLATES_PATH=/opt/helmward/control-plane/task_templates.json"
+Environment="DASHBOARD_DIR=/opt/helmward/dashboard"
+Environment="WIKI_DIR=/opt/helmward/wiki"
+Environment="LLAMA_SWAP_URL=http://CHANGE-ME:8081"
+Environment="HERMES_WEBUI_URL=http://127.0.0.1:8787"
+ExecStart=/opt/helmward/control-plane/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
