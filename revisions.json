@@ -1,0 +1,188 @@
+{
+  "$comment": "Helmward revision registry. Single source of truth for what has shipped at what revision. Live verification runs on CT201 (tools/verify_revisions.py) and stamps verdict + last_verified for probe-class lines. Build-time verification runs on Netlify against this committed data only: a probe-class line may render only if verdict == passed and last_verified is within staleness_days; an asserted-class line may render only if asserted_on is within assertion_staleness_days, and MUST render with a visible 'asserted, not verified' label.",
+  "schema_version": 1,
+  "staleness_days": 14,
+  "lines": [
+    {
+      "id": "verification-gate",
+      "public_name": "Verification gate",
+      "revision": "1.0",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "A zero-model probe independently checks agent-claimed results before a task resolves as done.",
+      "acceptance": {
+        "type": "command_exit_code",
+        "command": "cd /root/helmward-core && python3 -m pytest tests/test_verification.py -q",
+        "expected_exit_code": 0
+      },
+      "last_verified": "2026-07-27T16:19:04Z",
+      "verdict": "passed",
+      "next": {
+        "revision": "1.1",
+        "statement": "Probe types beyond shell: HTTP check, SQL query, CI action.",
+        "acceptance": null
+      },
+      "renderable": true,
+      "verdict_detail": "probe confirmed exit code 0",
+      "last_probe_command": "cd /root/helmward-core && python3 -m pytest tests/test_verification.py -q; echo PROBE_EXIT_CODE:$?"
+    },
+    {
+      "id": "durable-queue",
+      "public_name": "Durable task queue",
+      "revision": "1.0",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "Tasks persist with retries and dead-lettering; dispatch is pull-only.",
+      "acceptance": {
+        "type": "command_exit_code",
+        "command": "cd /root/helmward-core && python3 tools/doctor.py",
+        "expected_exit_code": 0
+      },
+      "spec_weakness": "doctor.py exits 0 on WARN, so this passes with warnings present. Tighten to a spec that asserts zero warnings, or narrow to a queue-specific probe.",
+      "last_verified": "2026-07-27T16:19:04Z",
+      "verdict": "passed",
+      "next": null,
+      "renderable": true,
+      "verdict_detail": "probe confirmed exit code 0",
+      "last_probe_command": "cd /root/helmward-core && python3 tools/doctor.py; echo PROBE_EXIT_CODE:$?"
+    },
+    {
+      "id": "attested",
+      "public_name": "attested (standalone verification library)",
+      "revision": "0.0.1",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "The gate's pure logic is published to PyPI and installable independently of Helmward.",
+      "acceptance": {
+        "type": "command_exit_code",
+        "command": "python3 -m pip download attested==0.0.1 -d /tmp/attested-probe --no-deps -q",
+        "expected_exit_code": 0
+      },
+      "last_verified": "2026-07-27T16:19:04Z",
+      "verdict": "passed",
+      "next": {
+        "revision": "0.1.0",
+        "statement": "Ships a curated library of validated spec templates.",
+        "acceptance": null
+      },
+      "renderable": true,
+      "verdict_detail": "probe confirmed exit code 0",
+      "last_probe_command": "python3 -m pip download attested==0.0.1 -d /tmp/attested-probe --no-deps -q; echo PROBE_EXIT_CODE:$?"
+    },
+    {
+      "id": "capability-claiming",
+      "public_name": "Capability-based claiming",
+      "revision": "0.1",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "Work is assigned by declared capability; agents claim it by polling. Manual assignment, not automatic routing.",
+      "acceptance": {
+        "type": "command_exit_code",
+        "command": "sh /root/helmward-core/tests/bait_test.sh apex-real",
+        "expected_exit_code": 0
+      },
+      "last_verified": "2026-07-27T16:19:04Z",
+      "verdict": "passed",
+      "next": {
+        "revision": "0.2",
+        "statement": "Route by task complexity automatically.",
+        "acceptance": null,
+        "status": "explicitly not planned"
+      },
+      "renderable": true,
+      "verdict_detail": "probe confirmed exit code 0",
+      "spec_note": "Must run as a direct subprocess (this is how verify_revisions.py invokes every acceptance command), never dispatched as a Helmward task itself. With one online agent at concurrency_limit=1, wrapping the outer script in a task of the same capability it probes causes the agent to compete with itself -- confirmed empirically 2026-07-27.",
+      "last_probe_command": "sh /root/helmward-core/tests/bait_test.sh apex-real; echo PROBE_EXIT_CODE:$?"
+    },
+    {
+      "id": "locality",
+      "public_name": "What runs on your hardware",
+      "revision": "0.1",
+      "state": "shipped",
+      "verification_class": "asserted",
+      "asserted_basis": "Not expressible in any current spec type: this is a negative claim about network egress, and every supported type asserts presence rather than absence. Basis is architectural inspection -- the control plane, agents, and llama-swap all bind to LAN addresses, and the only outbound path is the MCP bridge to the remote brain, which the statement names explicitly. Upgradeable to probe class by gate 1.1 (HTTP/egress probe types).",
+      "asserted_on": "2026-07-26T00:00:00Z",
+      "asserted_by": "Jon Rogers",
+      "statement": "Execution, data, agents and inference run on your hardware. The orchestrating brain is remote (Claude via MCP).",
+      "acceptance": null,
+      "acceptance_blocked_on": "NOT EXPRESSIBLE in the current spec types. This is a negative claim about network egress; every existing type asserts that something IS present, none can assert that nothing left the network. Needs the gate-1.1 assumption drop (probe types beyond shell) or an explicit egress-capture probe.",
+      "last_verified": null,
+      "verdict": "asserted",
+      "next": {
+        "revision": "0.2",
+        "statement": "The brain slot can be filled by a model running on your hardware; nothing leaves the network.",
+        "acceptance": null
+      },
+      "renderable": true,
+      "verdict_detail": "signed by Jon Rogers on 2026-07-26T00:00:00Z"
+    },
+    {
+      "id": "brain-slot",
+      "public_name": "Pluggable brain",
+      "revision": "0.1",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "The planning brain is a slot reached over MCP. Claude is the supported and tested occupant.",
+      "acceptance": null,
+      "acceptance_blocked_on": "Produced by Phase 1.2. 'Supported' must mean an automated check drives a task through the gate end to end, per the support-burden rule. Until the harness exists, this line has no spec.",
+      "last_verified": null,
+      "verdict": null,
+      "next": {
+        "revision": "0.2",
+        "statement": "Additional supported occupants: a local open-weight model, and any cloud model via OpenRouter.",
+        "acceptance": null,
+        "occupants_planned": [
+          "local-openweight",
+          "openrouter"
+        ]
+      },
+      "renderable": false,
+      "verdict_detail": "no acceptance spec: Produced by Phase 1.2. 'Supported' must mean an automated check drives a task through the gate end to end, per the support-burden rule. Until the harness exists, this line has no spec."
+    },
+    {
+      "id": "verified-memory",
+      "public_name": "Shared memory",
+      "revision": "0.1",
+      "state": "shipped",
+      "verification_class": "probe",
+      "statement": "A shared wiki is queryable on demand by any agent.",
+      "acceptance": {
+        "type": "command_output_contains",
+        "command": "curl -s http://127.0.0.1:8080/api/wiki/tree",
+        "expected": "\"mounted\":true"
+      },
+      "content_caveat": "Content is thin (concepts/=1 file, entities/=1 file). The line is honest about existence, not volume -- do not render this as 'memory that compounds'.",
+      "last_verified": "2026-07-27T16:19:04Z",
+      "verdict": "passed",
+      "next": {
+        "revision": "0.2",
+        "statement": "A remembered fact carries its own check and a timestamp; retrieval re-runs a stale check before an agent acts on it.",
+        "acceptance": null
+      },
+      "renderable": true,
+      "verdict_detail": "probe output contained expected string: {\"base\":\"/opt/helmward/wiki\",\"mounted\":true,\"pages\":[{\"path\":\"build-doc.md\",\"name\":\"build-doc\",\"dir\":\"\"},{\"path\":\"concepts/control-plane-status.md\",\"name\":\"control-plane-status\",\"dir\":\"concepts\"},{\"path\":\"concepts/deploy-marker-demo.md\",\"name\":\"deploy-marker-demo\",\"dir\":\"concepts\"},{\"path\":\"concepts/session-logging.md\",\"name\":\"session-logging\",\"dir\":\"concepts\"},{\"path\":\"entities/user-jon.md\",\"name\":\"user-jon\",\"dir\":\"entities\"},{\"path\":\"helmward-docs/HELMWARD-SETUP-GUIDE.md\",\"name\":\"HELMWARD-SETUP-GUIDE\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/build-doc-audit-findings.md\",\"name\":\"build-doc-audit-findings\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/decommission-checklist.md\",\"name\":\"decommission-checklist\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/helmward-launch-checklist.md\",\"name\":\"helmward-launch-checklist\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/helmward-troubleshooting.md\",\"name\":\"helmward-troubleshooting\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/log_entry_2026-07-06.md\",\"name\":\"log_entry_2026-07-06\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/onboarding-prompt.md\",\"name\":\"onboarding-prompt\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/verification-matrix-new-cases.md\",\"name\":\"verification-matrix-new-cases\",\"dir\":\"helmward-docs\"},{\"path\":\"helmward-docs/which-model-should-i-use.md\",\"name\":\"which-model-should-i-use\",\"dir\":\"helmward-docs\"},{\"path\":\"log.md\",\"name\":\"log\",\"dir\":\"\"},{\"path\":\"tmp-ct201-pull/GUIDE-DRYRUN.md\",\"name\":\"GUIDE-DRYRUN\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/GUIDE-NEW.md\",\"name\":\"GUIDE-NEW\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/ct201-state-2.md\",\"name\":\"ct201-state-2\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/ct201-state-3.md\",\"name\":\"ct201-state-3\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/ct201-state.md\",\"name\":\"ct201-state\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/dispatch-exit-code-snippet.md\",\"name\":\"dispatch-exit-code-snippet\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/dryrun-report.md\",\"name\":\"dryrun-report\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/dryrun2-report.md\",\"name\":\"dryrun2-report\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/guide-audit-diff.md\",\"name\":\"guide-audit-diff\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/guide-dryrun.md\",\"name\":\"guide-dryrun\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/guide-dryrun2.md\",\"name\":\"guide-dryrun2\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/guide-precheck.md\",\"name\":\"guide-precheck\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/guide-structure.md\",\"name\":\"guide-structure\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/patch-result.md\",\"name\":\"patch-result\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/pkg-and-ssh.md\",\"name\":\"pkg-and-ssh\",\"dir\":\"tmp-ct201-pull\"},{\"path\":\"tmp-ct201-pull/repatch-result.md\",\"name\":\"repatch-result\",\"dir\":\"tmp-ct201-pull\"}]}",
+      "last_probe_command": "curl -s http://127.0.0.1:8080/api/wiki/tree"
+    },
+    {
+      "id": "content-pipeline",
+      "public_name": "Automated build log",
+      "revision": "0.1",
+      "state": "regressed",
+      "verification_class": "probe",
+      "statement": "Generated and committed a post automatically. Worked through Jul 8, then broke. Publishing is manual today.",
+      "acceptance": null,
+      "acceptance_blocked_on": "Nothing to verify while regressed. A spec here would have to assert a post was generated and committed, which is currently false by design.",
+      "last_verified": null,
+      "verdict": "regressed",
+      "next": {
+        "revision": "0.2",
+        "statement": "Generated posts carry claims with attested specs; the build fails on an unverified claim.",
+        "acceptance": null
+      },
+      "renderable": false,
+      "verdict_detail": "line is regressed; not eligible to render"
+    }
+  ],
+  "assertion_staleness_days": 90,
+  "generated_at": "2026-07-27T16:19:04Z"
+}
