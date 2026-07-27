@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 _DB_PATH = os.environ.get("DB_PATH", "./data/agentos.db")
-_SCHEMA_PATH = os.environ.get("SCHEMA_PATH", "./schema.sql")
+_SCHEMA_PATH = os.environ.get("SCHEMA_PATH", Path(__file__).resolve().parent.parent / "schema.sql")
 
 _conn: Optional[sqlite3.Connection] = None
 _write_lock = threading.Lock()
@@ -85,11 +85,34 @@ def list_events(limit: int = 50) -> list[dict]:
 
 
 # ------------------------------------------------------------------------------ tasks
+_VALID_INITIAL_STATUSES = {"queued", "needs_approval"}
+
+
 def create_task(capability: str, payload: Any, max_attempts: int = 3,
                 parent_id: Optional[str] = None,
                 idempotency_key: Optional[str] = None,
-                verification_spec: Optional[Any] = None) -> dict:
-    """Insert a queued task. If idempotency_key already exists, return the existing task."""
+                verification_spec: Optional[Any] = None,
+                initial_status: str = "queued") -> dict:
+    """Insert a task, atomically, in the given initial_status (default 'queued').
+    If idempotency_key already exists, return the existing task.
+
+    initial_status exists so a task that must NEVER be briefly claimable
+    -- e.g. one gated behind a human approval -- can be born directly in
+    'needs_approval' rather than created as 'queued' and updated a
+    moment later. That two-step pattern is a real race: claim_task()
+    only checks `WHERE status='queued'`, so any task sitting there,
+    however briefly, is fair game for an agent to grab and actually
+    execute -- regardless of what it gets set to microseconds
+    afterward. Confirmed in practice 2026-07-27: this exact gap let a
+    denied blog-post publish task run anyway and go live without
+    authorization. Only 'queued' and 'needs_approval' are accepted;
+    anything else raises before any write happens.
+    """
+    if initial_status not in _VALID_INITIAL_STATUSES:
+        raise ValueError(
+            f"initial_status must be one of {sorted(_VALID_INITIAL_STATUSES)}, "
+            f"got {initial_status!r}"
+        )
     if idempotency_key:
         existing = get_task_by_idempotency(idempotency_key)
         if existing:
@@ -108,8 +131,8 @@ def create_task(capability: str, payload: Any, max_attempts: int = 3,
                 "INSERT INTO tasks (id, capability, payload, status, assigned_agent, "
                 "attempts, max_attempts, result, error, parent_id, idempotency_key, "
                 "created_at, updated_at, verification_spec) "
-                "VALUES (?, ?, ?, 'queued', NULL, 0, ?, NULL, NULL, ?, ?, ?, ?, ?)",
-                (task_id, capability, payload_str, max_attempts, parent_id,
+                "VALUES (?, ?, ?, ?, NULL, 0, ?, NULL, NULL, ?, ?, ?, ?, ?)",
+                (task_id, capability, payload_str, initial_status, max_attempts, parent_id,
                  idempotency_key, ts, ts, verification_spec_str),
             )
             _c().commit()
@@ -119,7 +142,7 @@ def create_task(capability: str, payload: Any, max_attempts: int = 3,
             if existing:
                 return existing
             raise
-    add_event("control-plane", "task_created", f"task {task_id} ({capability})",
+    add_event("control-plane", "task_created", f"task {task_id} ({capability}, {initial_status})",
               task_id=task_id)
     return get_task(task_id)
 
