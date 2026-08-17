@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helmward — Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#08070d; --bg2:#0b0a13; --sidebar:#0c0a15;
+    --panel:#14111f; --panel2:#1a1628; --raise:#211b33;
+    --border:#251f38; --border2:#2f2747;
+    --text:#ece8f6; --muted:#8b84a6; --dim:#645c80;
+    --accent:#8b5cf6; --accent2:#c084fc; --accentdim:#3b2d63;
+    --online:#34d399; --offline:#5b556e; --busy:#fbbf24; --run:#fbbf24;
+    --assigned:#8b5cf6; --done:#34d399; --failed:#fb7185; --queued:#5b556e;
+    --needs_approval:#c084fc;
+    --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 34px rgba(0,0,0,.35);
+    --glow:0 0 0 1px rgba(139,92,246,.25),0 10px 40px rgba(139,92,246,.08);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#160f2b 0%,var(--bg) 55%);
+    color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  a{color:inherit;text-decoration:none;}
+  .app{display:grid;grid-template-columns:236px 1fr;min-height:100vh;}
+
+  /* sidebar */
+  aside{background:linear-gradient(180deg,#0d0b17,#08070d);border-right:1px solid var(--border);
+    padding:18px 14px;position:sticky;top:0;height:100vh;overflow-y:auto;}
+  .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 16px;}
+  .brand .logo{width:26px;height:26px;border-radius:8px;flex:none;
+    background:conic-gradient(from 200deg,#8b5cf6,#c084fc,#6366f1,#8b5cf6);box-shadow:var(--glow);}
+  .brand .nm{font-weight:700;letter-spacing:.2px;}
+  .brand .sub{font-size:10px;color:var(--dim);letter-spacing:.18em;text-transform:uppercase;margin-top:1px;}
+  .navlbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+    margin:18px 10px 7px;font-weight:600;}
+  .navitem{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:var(--muted);
+    cursor:pointer;font-size:13.5px;}
+  .navitem:hover{background:var(--panel);color:var(--text);}
+  .navitem.active{background:linear-gradient(90deg,rgba(139,92,246,.18),rgba(139,92,246,.02));
+    color:var(--text);box-shadow:inset 2px 0 0 var(--accent);}
+  .navitem .ic{width:16px;text-align:center;opacity:.85;}
+  .navbadge{margin-left:auto;font-size:10px;font-weight:700;color:var(--accent2);background:rgba(139,92,246,.18);
+    padding:1px 7px;border-radius:999px;min-width:18px;text-align:center;}
+  .navbadge:empty{display:none;}
+  .sdot{width:7px;height:7px;border-radius:50%;background:var(--offline);flex:none;}
+  .sdot.online{background:var(--online);box-shadow:0 0 7px rgba(52,211,153,.8);}
+  .sidefoot{margin-top:18px;padding:10px;border-top:1px solid var(--border);}
+  .statuspill{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);}
+
+  /* main */
+  main{padding:26px 30px 70px;max-width:1280px;}
+  .pagehead{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:4px;}
+  .eyebrow{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent2);font-weight:600;}
+  h1{font-size:34px;margin:2px 0 2px;letter-spacing:-.5px;font-weight:750;}
+  .tagline{color:var(--muted);font-size:14px;}
+  .spacer{flex:1;}
+  .updated{font-size:11.5px;color:var(--dim);}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;margin:22px 0 6px;}
+  .stat{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--border);
+    border-radius:14px;padding:14px 15px;box-shadow:var(--shadow);position:relative;overflow:hidden;}
+  .stat .lab{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:7px;}
+  .stat .big{font-size:21px;font-weight:700;margin-top:8px;letter-spacing:-.3px;}
+  .stat .meta{font-size:11.5px;color:var(--muted);margin-top:3px;}
+  .stat .corner{position:absolute;top:12px;right:13px;width:8px;height:8px;border-radius:50%;background:var(--offline);}
+  .stat .corner.online{background:var(--online);box-shadow:0 0 8px rgba(52,211,153,.8);}
+
+  .sectlbl{font-size:11px;text-transform:uppercase;letter-spacing:.16em;color:var(--dim);
+    margin:30px 0 13px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .sectlbl .ln{height:1px;background:var(--border);flex:1;}
+
+  .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));}
+  .acard{background:linear-gradient(165deg,var(--panel2),var(--panel));border:1px solid var(--border);
+    border-radius:15px;padding:16px;box-shadow:var(--shadow);position:relative;overflow:hidden;transition:border-color .15s,transform .15s;}
+  .acard:hover{border-color:var(--border2);transform:translateY(-2px);}
+  .acard::after{content:"";position:absolute;inset:0 0 auto 0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:0;transition:opacity .2s;}
+  .acard.online::after{opacity:.5;}
+  .acard .top{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+  .acard .who{display:flex;align-items:center;gap:11px;min-width:0;}
+  .av{width:34px;height:34px;border-radius:10px;flex:none;display:grid;place-items:center;font-weight:800;
+    font-size:14px;color:#0a0a12;background:linear-gradient(150deg,#c084fc,#8b5cf6);}
+  .acard.offline .av{background:linear-gradient(150deg,#4a4560,#322d44);color:#9990b3;}
+  .acard .nm{font-size:15.5px;font-weight:680;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .acard .desc{color:var(--muted);font-size:12.5px;margin:11px 0 13px;min-height:34px;}
+  .badge{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:4px 9px;border-radius:999px;white-space:nowrap;}
+  .badge.online{background:rgba(52,211,153,.16);color:#5ce0ad;box-shadow:inset 0 0 0 1px rgba(52,211,153,.35);}
+  .badge.offline,.badge.idle,.badge.cancelled,.badge.queued{background:rgba(120,114,150,.16);color:#9b94b6;box-shadow:inset 0 0 0 1px rgba(120,114,150,.3);}
+  .badge.busy,.badge.running{background:rgba(251,191,36,.15);color:#f5c451;box-shadow:inset 0 0 0 1px rgba(251,191,36,.32);}
+  .badge.assigned{background:rgba(139,92,246,.18);color:#b99cff;box-shadow:inset 0 0 0 1px rgba(139,92,246,.4);}
+  .badge.done{background:rgba(52,211,153,.16);color:#5ce0ad;}
+  .badge.failed{background:rgba(251,113,133,.16);color:#ff9aac;box-shadow:inset 0 0 0 1px rgba(251,113,133,.35);}
+  .badge.needs_approval{background:rgba(192,132,252,.18);color:#d7b3ff;}
+  .kv{font-size:11.5px;margin:3px 0;display:flex;gap:8px;}
+  .kv .lbl{color:var(--dim);min-width:70px;flex:none;}
+  .kv .val{color:#cfc8e4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .kv .val .sep{color:var(--accent);margin:0 5px;}
+  .roomline{margin-top:14px;}
+  .roombtn{width:100%;font:inherit;font-size:12.5px;font-weight:650;border-radius:10px;padding:9px;
+    border:1px solid var(--border2);cursor:pointer;color:var(--accent2);background:linear-gradient(90deg,rgba(139,92,246,.14),rgba(139,92,246,.04));}
+  .roombtn:hover{filter:brightness(1.2);border-color:var(--accent);}
+
+  .panel{background:linear-gradient(165deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;}
+  .phead{padding:12px 16px;border-bottom:1px solid var(--border);font-weight:680;font-size:13px;display:flex;justify-content:space-between;align-items:center;}
+  .phead .count{color:var(--dim);font-weight:500;font-size:11.5px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--border);}
+  th{color:var(--dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;}
+  td.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--muted);}
+  .feed{max-height:72vh;overflow-y:auto;}
+  .ev{display:flex;gap:11px;padding:10px 16px;border-bottom:1px solid var(--border);}
+  .ev:last-child{border-bottom:none;}
+  .ev .tdot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none;background:var(--dim);}
+  .ev.result .tdot,.ev.done .tdot{background:var(--done);}
+  .ev.assigned .tdot,.ev.task_created .tdot{background:var(--assigned);}
+  .ev.running .tdot,.ev.heartbeat .tdot{background:var(--run);}
+  .ev.error .tdot,.ev.dead_letter .tdot{background:var(--failed);}
+  .ev.retry .tdot,.ev.approval_resolved .tdot,.ev.registered .tdot{background:var(--accent);}
+  .ev .body{flex:1;min-width:0;}
+  .ev .row1{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;}
+  .ev .who{font-weight:650;font-size:12px;}
+  .ev .type{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);}
+  .ev .msg{font-size:12.5px;color:#cfc8e4;}
+  .ev .ts{font-size:11px;color:var(--dim);white-space:nowrap;}
+  .appr{padding:14px 16px;border-bottom:1px solid var(--border);}
+  .appr:last-child{border-bottom:none;}
+  .appr.busy{opacity:.5;}
+  .appr .action{font-weight:680;font-size:13px;}
+  .appr .who{color:var(--dim);font-size:11.5px;margin:2px 0 6px;}
+  .appr .details{font-size:12.5px;color:#cfc8e4;}
+  .btns{margin-top:10px;display:flex;gap:8px;}
+  .btn{font:inherit;font-size:12.5px;font-weight:650;border-radius:9px;padding:7px 15px;border:1px solid var(--border2);cursor:pointer;background:var(--raise);color:var(--text);}
+  .btn.approve{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4);color:#7ef0ad;}
+  .btn.deny{background:rgba(251,113,133,.13);border-color:rgba(251,113,133,.4);color:#ffaeba;}
+  .btn:hover:not([disabled]){filter:brightness(1.18);}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;}
+  .empty{padding:18px 16px;color:var(--muted);font-size:13px;}
+  .foot{color:var(--dim);font-size:11px;margin-top:30px;}
+  code{background:var(--raise);padding:1px 6px;border-radius:5px;font-size:11.5px;}
+
+  /* wiki */
+  .wikiwrap{display:grid;grid-template-columns:248px 1fr;gap:16px;align-items:start;}
+  @media (max-width:760px){.wikiwrap{grid-template-columns:1fr;}}
+  .wikilist{background:linear-gradient(165deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:14px;padding:10px;max-height:78vh;overflow-y:auto;box-shadow:var(--shadow);}
+  .wikilist .wgrp{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim);margin:12px 8px 5px;font-weight:700;}
+  .wikilist .wlink{display:block;padding:6px 9px;border-radius:8px;color:var(--muted);font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .wikilist .wlink:hover{background:var(--raise);color:var(--text);}
+  .wikilist .wlink.active{background:rgba(139,92,246,.16);color:var(--text);box-shadow:inset 2px 0 0 var(--accent);}
+  .wikidoc{padding:26px 32px;max-height:78vh;overflow-y:auto;}
+  .md{font-size:14px;line-height:1.7;color:#d7d1e8;}
+  .md h1,.md h2,.md h3,.md h4{color:#fff;line-height:1.3;margin:1.4em 0 .5em;}
+  .md h1{font-size:25px;border-bottom:1px solid var(--border);padding-bottom:.3em;}
+  .md h2{font-size:20px;} .md h3{font-size:16px;} .md h4{font-size:13.5px;color:var(--accent2);text-transform:uppercase;letter-spacing:.04em;}
+  .md p{margin:.7em 0;} .md a{color:var(--accent2);} .md a:hover{text-decoration:underline;}
+  .md a.wl{color:#7dd3fc;cursor:pointer;}
+  .md code{background:var(--raise);padding:1px 6px;border-radius:5px;font-size:12.5px;}
+  .md pre{background:#0c0a14;border:1px solid var(--border);border-radius:11px;padding:14px;overflow:auto;}
+  .md pre code{background:none;padding:0;font-size:12.5px;line-height:1.5;}
+  .md ul,.md ol{margin:.6em 0;padding-left:1.4em;} .md li{margin:.25em 0;}
+  .md blockquote{border-left:3px solid var(--accent);margin:.8em 0;padding:.3em 0 .3em 14px;color:var(--muted);}
+  .md hr{border:none;border-top:1px solid var(--border);margin:1.4em 0;}
+  .md table{border-collapse:collapse;margin:1em 0;font-size:13px;}
+  .md th,.md td{border:1px solid var(--border2);padding:7px 12px;text-align:left;}
+  .md th{background:var(--raise);color:#fff;}
+  .md .frontmatter{color:var(--dim);font-size:12px;border:1px dashed var(--border2);border-radius:9px;padding:9px 13px;margin:0 0 16px;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;}
+
+  /* toasts */
+  #toasts{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:10px;}
+  .toast{min-width:210px;max-width:360px;padding:12px 16px;border-radius:11px;background:var(--panel2);border:1px solid var(--border2);box-shadow:var(--shadow);font-size:13px;font-weight:650;}
+  .toast.ok{border-color:rgba(52,211,153,.5);background:#10261d;color:#c7f9dd;}
+  .toast.err{border-color:rgba(251,113,133,.5);background:#2a1320;color:#ffd2da;}
+  .toast .sub{display:block;font-weight:400;font-size:11.5px;color:var(--muted);margin-top:3px;}
+
+  /* control room modal */
+  .scrim{position:fixed;inset:0;background:rgba(5,4,10,.72);backdrop-filter:blur(3px);z-index:60;display:none;align-items:center;justify-content:center;padding:24px;}
+  .scrim.show{display:flex;}
+  .room{width:min(640px,100%);max-height:88vh;overflow-y:auto;background:linear-gradient(165deg,#16121f,#100d18);border:1px solid var(--border2);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.6),var(--glow);}
+  .rhead{display:flex;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border);}
+  .rhead .av{width:38px;height:38px;font-size:15px;}
+  .rhead .nm{font-size:16px;font-weight:700;}
+  .rhead .meta{font-size:11.5px;color:var(--muted);}
+  .rhead .x{margin-left:auto;cursor:pointer;color:var(--muted);font-size:20px;line-height:1;padding:4px 8px;border-radius:8px;}
+  .rhead .x:hover{background:var(--raise);color:var(--text);}
+  .rbody{padding:18px 20px;}
+  .rbody textarea{width:100%;min-height:90px;resize:vertical;background:#0c0a14;color:var(--text);border:1px solid var(--border2);border-radius:11px;padding:12px 14px;font:inherit;font-size:13.5px;}
+  .rbody textarea:focus{outline:none;border-color:var(--accent);}
+  .rrow{display:flex;align-items:center;gap:10px;margin-top:12px;}
+  .send{font:inherit;font-weight:700;font-size:13.5px;border:none;border-radius:11px;padding:10px 20px;cursor:pointer;color:#0a0a12;background:linear-gradient(90deg,#c084fc,#8b5cf6);}
+  .send:hover{filter:brightness(1.1);}
+  .send[disabled]{opacity:.5;cursor:not-allowed;}
+  .rcap{font-size:11.5px;color:var(--dim);}
+  .rout{margin-top:16px;border-top:1px solid var(--border);padding-top:14px;display:none;}
+  .rout.show{display:block;}
+  .rout .st{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent2);font-weight:700;}
+  .rout pre{white-space:pre-wrap;word-break:break-word;background:#0c0a14;border:1px solid var(--border);border-radius:11px;padding:13px 15px;font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#dcd5ee;margin:9px 0 0;max-height:320px;overflow:auto;}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--accentdim);border-top-color:var(--accent2);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-right:6px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+
+  /* Typography pass: monospace for technical/label elements, keeping body prose on system sans */
+  :root{ --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; }
+  .brand .nm, .navlbl, .navitem, .eyebrow, h1, .stat .lab, .stat .big,
+  .sectlbl, th, .badge, .kv .lbl, .phead, .acard .nm{
+    font-family: var(--mono);
+  }
+  h1{ font-weight:700; letter-spacing:-1px; }
+  .badge{ letter-spacing:.08em; }
+</style>
+</head>
+<body>
+<div id="toasts"></div>
+
+<div class="app">
+  <aside>
+    <div class="brand">
+      <div class="logo"></div>
+      <div><div class="nm">Helmward</div><div class="sub">Local · Studio</div></div>
+    </div>
+    <div class="navlbl">Workspace</div>
+    <div class="navitem active" id="nav-mission" onclick="switchView('mission')"><span class="ic">◎</span> Mission Control</div>
+    <div class="navitem" id="nav-approvals" onclick="switchView('approvals')"><span class="ic">✔</span> Approvals<span id="nav-apct" class="navbadge"></span></div>
+    <div class="navitem" id="nav-tasks" onclick="switchView('tasks')"><span class="ic">▤</span> Tasks<span id="nav-tkct" class="navbadge"></span></div>
+    <div class="navitem" id="nav-activity" onclick="switchView('activity')"><span class="ic">⟁</span> Activity</div>
+    <div class="navitem" id="nav-insights" onclick="switchView('insights')"><span class="ic">✦</span> Insights</div>
+    <div class="navitem" id="nav-wiki" onclick="switchView('wiki')"><span class="ic">▦</span> Wiki</div>
+    <div class="navitem" id="nav-models" onclick="switchView('models')"><span class="ic">⧉</span> Models</div>
+    <div class="navlbl">Agents</div>
+    <div id="sideagents"></div>
+    <div class="sidefoot">
+      <span class="statuspill"><span id="sidedot" class="sdot"></span> <span id="sidestatus">connecting…</span></span>
+    </div>
+  </aside>
+
+  <main>
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">◇ Local · Studio</div>
+        <h1 id="pagetitle">Mission Control</h1>
+        <div class="tagline" id="tagline">Status of every agent, every memory, every signal.</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="updated" id="updated">—</div>
+    </div>
+
+    <!-- Mission Control view -->
+    <section class="view" id="view-mission">
+      <div class="stats" id="stats"></div>
+      <div class="sectlbl">Agents <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;">· click to open control room</span><span class="ln"></span></div>
+      <div id="agents" class="grid"></div>
+    </section>
+
+    <!-- Approvals view -->
+    <section class="view" id="view-approvals" style="display:none;">
+      <div class="sectlbl">Pending Approvals<span class="ln"></span></div>
+      <div class="panel">
+        <div class="phead">Pending <span id="apcount" class="count"></span></div>
+        <div id="approvals"></div>
+      </div>
+    </section>
+
+    <!-- Tasks view -->
+    <section class="view" id="view-tasks" style="display:none;">
+      <div class="sectlbl">Task Queue<span class="ln"></span></div>
+      <div class="panel" style="margin-bottom:15px;">
+        <div class="phead">New task from template</div>
+        <div style="padding:14px 16px;">
+          <select id="templateSelect" onchange="onTemplateChange()" style="width:100%;padding:8px 10px;background:var(--panel2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:13px;">
+            <option value="">Loading templates…</option>
+          </select>
+          <div id="templateDesc" style="font-size:12px;color:var(--dim);margin-top:8px;"></div>
+          <div id="templateParams" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
+          <button id="templateCreateBtn" onclick="createFromTemplate()" disabled
+            style="margin-top:12px;font:inherit;font-size:12.5px;font-weight:650;border-radius:9px;padding:8px 16px;border:1px solid var(--border2);cursor:pointer;color:var(--accent2);background:linear-gradient(90deg,rgba(139,92,246,.14),rgba(139,92,246,.04));">
+            Create task
+          </button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="phead">Tasks <span id="taskcount" class="count"></span></div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>id</th><th>capability</th><th>status</th><th>assigned</th><th>tries</th><th>result / error</th></tr></thead>
+            <tbody id="taskrows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Activity view -->
+    <section class="view" id="view-activity" style="display:none;">
+      <div class="sectlbl">Activity Feed<span class="ln"></span></div>
+      <div class="panel">
+        <div class="phead">Events <span id="evcount" class="count"></span></div>
+        <div id="feedbody" class="feed"></div>
+      </div>
+    </section>
+
+    <!-- Insights (Dream) view -->
+    <section class="view" id="view-insights" style="display:none;">
+      <div class="sectlbl">Dream Insights<span class="ln"></span><span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--dim);cursor:pointer" onclick="loadInsights()">&#8635; refresh</span></div>
+      <div class="panel" style="padding:0">
+        <div class="wikidoc" id="insightsdoc" style="max-height:none"><div class="empty" style="padding:24px">Loading…</div></div>
+      </div>
+    </section>
+
+    <!-- Wiki view -->
+    <section class="view" id="view-wiki" style="display:none;">
+      <div class="sectlbl">Knowledge Base<span class="ln"></span><span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--dim);cursor:pointer" onclick="wikiLoaded=false;switchView('wiki')">&#8635; refresh</span></div>
+      <div class="wikiwrap">
+        <div class="wikilist" id="wikilist"><div class="empty">Loading…</div></div>
+        <div class="wikidoc panel" id="wikidoc"><div class="empty" style="padding:24px">Select a page from the left to read it.</div></div>
+      </div>
+    </section>
+
+    <!-- Models view -->
+    <section class="view" id="view-models" style="display:none;">
+      <div class="sectlbl">Inference Models<span class="ln"></span><span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--dim);cursor:pointer" onclick="modelsLoaded=false;switchView('models')">&#8635; refresh</span></div>
+      <div class="panel">
+        <div class="phead">Registered in llama-swap <span id="modelcount" class="count"></span></div>
+        <div id="modelslist" style="padding:8px"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="sectlbl" style="margin-top:26px;">Model Reliability<span class="ln"></span></div>
+      <div class="panel">
+        <div class="phead">Verification pass/fail, by model <span id="reliabilitycount" class="count"></span></div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>model</th><th>verification type</th><th>passed</th><th>failed</th><th>total</th><th>pass rate</th></tr></thead>
+            <tbody id="reliabilityrows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
+    <div class="foot">Helmward control plane · live from <code>/api/state</code> on :8080 · refreshes every 3s · agent &#8800; host &#8800; inference endpoint.</div>
+  </main>
+</div>
+
+<!-- control room -->
+<div class="scrim" id="scrim" onclick="if(event.target===this)closeRoom()">
+  <div class="room">
+    <div class="rhead">
+      <div class="av" id="r_av">A</div>
+      <div><div class="nm" id="r_name">Agent</div><div class="meta" id="r_meta"></div></div>
+      <div class="x" onclick="closeRoom()">&#10005;</div>
+    </div>
+    <div class="rbody">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:8px;">
+        <span style="font-size:12px;color:var(--dim);white-space:nowrap;">Model</span>
+        <select id="r_model_select" onchange="onRoomModelSelectChange()"
+          style="flex:1;padding:6px 10px;background:var(--panel2);border:1px solid var(--border2);border-radius:7px;color:var(--text);font:inherit;font-size:12.5px;">
+          <option value="">Loading models…</option>
+        </select>
+        <button id="r_model_btn" onclick="updateAgentModel()"
+          style="flex:none;font:inherit;font-size:12px;font-weight:650;border-radius:7px;padding:6px 12px;border:1px solid var(--border2);cursor:pointer;color:var(--accent2);background:linear-gradient(90deg,rgba(139,92,246,.14),rgba(139,92,246,.04));">
+          Assign
+        </button>
+      </div>
+      <input type="text" id="r_model_custom" placeholder="model name for this agent's own backend"
+        style="width:100%;padding:6px 10px;background:var(--panel2);border:1px solid var(--border2);border-radius:7px;color:var(--text);font:inherit;font-size:12.5px;margin-bottom:16px;display:none;">
+      <div style="border-bottom:1px solid var(--border);margin-bottom:16px;"></div>
+      <textarea id="r_prompt" placeholder="Give this agent a task… (e.g. summarize today's listings, draft an SEO outline, check a file)"></textarea>
+      <div class="rrow">
+        <button class="send" id="r_send" onclick="sendRoom()">Send task &#8629;</button>
+        <span class="rcap" id="r_cap"></span>
+      </div>
+      <div class="rout" id="r_out">
+        <div class="st" id="r_status"></div>
+        <pre id="r_result"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=(id)=>document.getElementById(id);
+const esc=(s)=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+function timeAgo(iso){if(!iso)return"—";const t=Date.parse(iso);if(isNaN(t))return esc(iso);
+  let s=Math.round((Date.now()-t)/1000);if(s<0)return new Date(t).toLocaleTimeString();
+  if(s<60)return s+"s ago";if(s<3600)return Math.floor(s/60)+"m ago";
+  if(s<86400)return Math.floor(s/3600)+"h ago";return Math.floor(s/86400)+"d ago";}
+function trunc(s,n){s=String(s==null?"":s);return s.length>n?s.slice(0,n)+"…":s;}
+function caps(a){try{const c=JSON.parse(a.capabilities);return Array.isArray(c)?c:[];}catch(_){return a.capabilities?[String(a.capabilities)]:[];}}
+function initial(s){s=String(s||"?").replace(/[^A-Za-z0-9]/g,"");return (s[0]||"?").toUpperCase();}
+
+function toast(msg,kind,sub){const box=$("toasts");if(!box)return;const el=document.createElement("div");
+  el.className="toast "+(kind||"info");el.innerHTML=esc(msg)+(sub?`<span class="sub">${esc(sub)}</span>`:"");
+  box.appendChild(el);setTimeout(()=>{el.style.transition="opacity .3s";el.style.opacity="0";setTimeout(()=>el.remove(),320);},kind==="err"?6000:3000);}
+
+async function tryJson(path,opts){try{const r=await fetch(path,Object.assign({cache:"no-store"},opts||{}));
+  if(!r.ok){try{return await r.json();}catch(_){return null;}}return await r.json();}catch(_){return null;}}
+
+let online=false, lastAgents=[];
+const _expandedIds = window._expandedIds || (window._expandedIds = new Set());
+function toggleExpand(id, btn){
+  const el = document.getElementById(id);
+  if (!el) return;
+  const opening = el.style.display === 'none' || el.style.display === '';
+  if (opening) { el.style.display = 'block'; btn.textContent = '▲ collapse'; _expandedIds.add(id); }
+  else { el.style.display = 'none'; btn.textContent = '▶ expand'; _expandedIds.delete(id); }
+}
+async function load(){
+  const state=await tryJson("./api/state");
+  if(!state||!state.agents){online=false;
+    $("sidedot").className="sdot";$("sidestatus").textContent="control plane down";
+    $("updated").textContent="last try "+new Date().toLocaleTimeString();return;}
+  online=true;
+  $("sidedot").className="sdot online";$("sidestatus").textContent="live · :8080";
+  $("updated").textContent="updated "+new Date().toLocaleTimeString();
+  const _scrollPos = new Map();
+  for (const id of _expandedIds) { const el = document.getElementById(id); if (el) _scrollPos.set(id, el.scrollTop); }
+  render(state);
+  for (const [id, top] of _scrollPos) { const el = document.getElementById(id); if (el) el.scrollTop = top; }
+}
+
+function render(s){
+  const agents=s.agents||[]; lastAgents=agents;
+  const tasks=s.tasks||[];
+  const evs=(s.events||[]).slice().reverse();
+  const appr=(s.approvals||[]);
+  const pend=appr.filter(a=>a.status==="pending");
+  const onlineN=agents.filter(a=>a.status==="online").length;
+  const active=tasks.filter(t=>["queued","assigned","running","needs_approval"].includes(t.status)).length;
+  const done=tasks.filter(t=>t.status==="done").length;
+  const lastEv=evs[0];
+  if($("nav-apct"))$("nav-apct").textContent=pend.length||"";
+  if($("nav-tkct"))$("nav-tkct").textContent=active||"";
+
+  $("stats").innerHTML=`
+    <div class="stat"><div class="lab"><span class="corner online"></span>Control Plane</div>
+      <div class="big">LIVE</div><div class="meta">API + dashboard · :8080</div></div>
+    <div class="stat"><div class="lab">Agents</div>
+      <div class="big">${onlineN}<span style="color:var(--dim);font-size:15px">/${agents.length}</span></div>
+      <div class="meta">online / registered</div></div>
+    <div class="stat"><div class="lab">Task Queue</div>
+      <div class="big">${active}</div><div class="meta">${active} active · ${done} done</div></div>
+    <div class="stat"><div class="lab">Approvals</div>
+      <div class="big">${pend.length}</div><div class="meta">${pend.length?"awaiting you":"all clear"}</div></div>
+    <div class="stat"><div class="lab">Last Signal</div>
+      <div class="big" style="font-size:16px">${lastEv?timeAgo(lastEv.ts):"—"}</div>
+      <div class="meta">${lastEv?esc(trunc(lastEv.type+" · "+(lastEv.source||""),30)):"no events"}</div></div>`;
+
+  $("sideagents").innerHTML=agents.map(a=>`
+    <div class="navitem" onclick="openRoom('${esc(a.agent_id)}')">
+      <span class="sdot ${a.status==='online'?'online':''}"></span> ${esc(a.agent_id)}
+    </div>`).join("")||`<div class="navitem" style="color:var(--dim)">none</div>`;
+
+  $("agents").innerHTML=agents.map(a=>{
+    const cs=caps(a);
+    return `<div class="acard ${esc(a.status)}">
+      <div class="top">
+        <div class="who"><div class="av">${esc(initial(a.agent_id))}</div>
+          <div class="nm">${esc(a.role_name||a.agent_id)}</div></div>
+        <span class="badge ${esc(a.status)}">${esc(a.status||"?")}</span>
+      </div>
+      <div class="desc">${esc(a.role_name && a.role_name!==a.agent_id ? a.agent_id : "")}${cs.length?` · caps: ${esc(cs.join(", "))}`:""}</div>
+      <div class="kv"><span class="lbl">model</span><span class="val">${esc(a.inference_models||"—")} <span class="sep">·</span> ${esc(a.inference_provider||"")}</span></div>
+      <div class="kv"><span class="lbl">host</span><span class="val">${esc(a.host_identity||"not provided")}${a.ipv4?` <span class="sep">·</span> ${esc(a.ipv4)}`:""}</span></div>
+      <div class="kv"><span class="lbl">endpoint</span><span class="val">${esc(a.inference_endpoint||"not provided")}</span></div>
+      <div class="kv"><span class="lbl">heartbeat</span><span class="val">${timeAgo(a.last_heartbeat)}${a.current_task?` <span class="sep">·</span> ${esc(a.current_task)}`:""}</span></div>
+      <div class="roomline"><button class="roombtn" onclick="openRoom('${esc(a.agent_id)}')">Open Control Room →</button></div>
+    </div>`;}).join("")||`<div class="empty">No agents registered.</div>`;
+
+  $("taskcount").textContent=tasks.length?tasks.length+" tasks":"";
+  $("taskrows").innerHTML=tasks.map(t=>{
+    const full=t.status==="failed"?t.error:t.result;
+    const short=trunc(full,80);
+    const id="expand-"+t.id.replace(/[^a-z0-9]/gi,"");
+    const hasMore=full&&full.length>80;
+    return `<tr>
+      <td class="mono">${esc(t.id)}</td>
+      <td>${esc(t.capability||"")}</td>
+      <td><span class="badge ${esc(t.status)}">${esc(t.status||"?")}</span></td>
+      <td>${esc(t.assigned_agent||"—")}</td>
+      <td>${esc(t.attempts)}/${esc(t.max_attempts)}</td>
+      <td>
+        <span>${esc(short)}</span>
+        ${hasMore?`<button onclick="toggleExpand('${id}', this)" style="margin-left:6px;font-size:11px;padding:1px 6px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--dim);cursor:pointer;">${_expandedIds.has(id)?'▲ collapse':'▶ expand'}</button><pre id="${id}" style="display:${_expandedIds.has(id)?'block':'none'};margin:6px 0 0;padding:8px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:400px;overflow-y:auto;color:var(--text);">${esc(full||"")}</pre>`:""}
+      </td>
+    </tr>`;
+  }).join("")
+    ||`<tr><td colspan="6" class="empty">No tasks yet — open a control room and send one.</td></tr>`;
+
+  $("evcount").textContent=evs.length?evs.length+" events":"";
+  $("feedbody").innerHTML=evs.map(e=>`
+    <div class="ev ${esc(e.type)}"><div class="tdot"></div><div class="body">
+      <div class="row1"><span class="who">${esc(e.source||"")}</span><span class="type">${esc(e.type)}</span></div>
+      <div class="msg">${esc(e.message||"")}${e.task_id?` <span style="color:var(--dim)">(${esc(e.task_id)})</span>`:""}</div>
+    </div><div class="ts">${timeAgo(e.ts)}</div></div>`).join("")||`<div class="empty">No events yet.</div>`;
+
+  $("apcount").textContent=pend.length?pend.length+" pending":"none pending";
+  $("approvals").innerHTML=pend.map(a=>{
+    const dfull=a.details||"";
+    const dshort=trunc(dfull,80);
+    const did="apdet-"+esc(a.id).replace(/[^a-z0-9]/gi,"");
+    const dhasMore=dfull&&dfull.length>80;
+    return `
+    <div class="appr" id="appr-${esc(a.id)}"><div class="action">${esc(a.action||"")}</div>
+      <div class="who">${esc(a.id)} · ${esc(a.task_id||"")} · ${timeAgo(a.created_at)}</div>
+      <div class="details"><span>${esc(dshort)}</span>${dhasMore?`<button onclick="toggleExpand('${did}', this)" style="margin-left:6px;font-size:11px;padding:1px 6px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--dim);cursor:pointer;">${_expandedIds.has(did)?'▲ collapse':'▶ expand'}</button><pre id="${did}" style="display:${_expandedIds.has(did)?'block':'none'};margin:6px 0 0;padding:8px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:400px;overflow-y:auto;color:var(--text);">${esc(dfull)}</pre>`:""}</div>
+      <div class="btns">
+        <button class="btn approve" onclick="resolve('${esc(a.id)}','approved')">Approve</button>
+        <button class="btn deny" onclick="resolve('${esc(a.id)}','denied')">Deny</button>
+      </div></div>`;}).join("")||`<div class="empty">No pending approvals. 🎉</div>`;
+}
+
+async function resolve(id,decision){
+  if(!online){toast("Control plane unreachable","err");return;}
+  const card=$("appr-"+id);
+  if(card){card.classList.add("busy");card.querySelectorAll("button").forEach(b=>b.disabled=true);}
+  toast((decision==="approved"?"Approving":"Denying")+"… ("+id+")","info");
+  let res=null,ok=false;
+  try{const r=await fetch("./api/approvals/resolve",{method:"POST",cache:"no-store",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({id,decision})});
+    ok=r.ok;try{res=await r.json();}catch(_){res=null;}}catch(err){console.error(err);}
+  if(!ok||!res||!res.ok){const d=(res&&(res.detail||res.error))||"No response.";
+    if(card){card.classList.remove("busy");card.querySelectorAll("button").forEach(b=>b.disabled=false);}
+    toast("Could not resolve "+id,"err",d);return;}
+  toast(decision==="approved"?"Approved ✓":"Denied ✓","ok",id);
+  if(card)card.remove();await load();
+}
+
+/* view tabs */
+let currentView="mission";
+const VIEW_TITLES={mission:["Mission Control","Status of every agent, every memory, every signal."],
+  approvals:["Approvals","Actions awaiting your decision."],
+  tasks:["Tasks","Every task across the fleet, live."],
+  activity:["Activity","Live signal from every agent."],
+  insights:["Insights","Nightly Dream recommendations — your AI working while you sleep."],
+  wiki:["Wiki","Browse the shared knowledge base."],
+  models:["Models","Switch the active inference model across the fleet."]};
+function switchView(v){
+  currentView=v;
+  ["mission","approvals","tasks","activity","insights","wiki","graph","models"].forEach(x=>{
+    const sec=$("view-"+x); if(sec) sec.style.display=(x===v)?"":"none";
+
+    const nav=$("nav-"+x); if(nav) nav.classList.toggle("active",x===v);
+  });
+  const t=VIEW_TITLES[v]||VIEW_TITLES.mission;
+  $("pagetitle").textContent=t[0]; $("tagline").textContent=t[1];
+  if(v==="wiki" && !wikiLoaded){ wikiLoaded=true; loadWikiTree(); }
+  if(v==="insights"){ loadInsights(); }
+  if(v==="graph" && !graphLoaded){ graphLoaded=true; loadGraph(); }
+  if(v==="tasks" && !templatesLoaded){ templatesLoaded=true; loadTaskTemplates(); }
+  if(v==="models" && !modelsLoaded){ modelsLoaded=true; loadModels(); loadReliability(); }
+}
+
+
+let graphData={nodes:[],edges:[]}, graphZoom=1, graphOffset={x:0,y:0};
+let graphAnimate=false, graphLoaded=false, simTimer=null, simulating=false;
+let dragNode=null, dragStart=null, panStart=null;
+
+async function loadGraph(){
+  graphData = {
+    nodes:[
+      {id:'apex',label:'Apex',type:'agent',color:'#2563eb',x:300,y:200,vx:0,vy:0},
+      {id:'rook',label:'Rook',type:'agent',color:'#7c3aed',x:200,y:300,vx:0,vy:0},
+      {id:'owl',label:'OWL',type:'agent',color:'#059669',x:400,y:300,vx:0,vy:0},
+      {id:'learnfast',label:'LearnFast',type:'project',color:'#f59e0b',x:300,y:100,vx:0,vy:0},
+      {id:'helmward',label:'Helmward',type:'project',color:'#2563eb',x:150,y:150,vx:0,vy:0},
+      {id:'homeranker',label:'Home Ranker',type:'project',color:'#ef4444',x:450,y:150,vx:0,vy:0},
+      {id:'windows',label:'Windows Box',type:'machine',color:'#0ea5e9',x:200,y:420,vx:0,vy:0},
+      {id:'mac',label:'Mac M3 Pro',type:'machine',color:'#0ea5e9',x:400,y:420,vx:0,vy:0},
+      {id:'ct201',label:'CT201',type:'machine',color:'#0ea5e9',x:300,y:420,vx:0,vy:0},
+      {id:'qwythos',label:'Qwythos-9B',type:'model',color:'#8b5cf6',x:150,y:340,vx:0,vy:0},
+      {id:'qwen35',label:'Qwen3.5-9B',type:'model',color:'#8b5cf6',x:450,y:340,vx:0,vy:0},
+    ],
+    edges:[
+      {source:'apex',target:'ct201',label:'runs on'},
+      {source:'apex',target:'qwythos',label:'uses'},
+      {source:'rook',target:'qwen35',label:'uses'},
+      {source:'qwythos',target:'windows',label:'served by'},
+      {source:'qwen35',target:'mac',label:'served by'},
+      {source:'apex',target:'learnfast',label:'builds'},
+      {source:'apex',target:'helmward',label:'powers'},
+      {source:'owl',target:'homeranker',label:'manages'},
+    ]
+  };
+  initCanvas();
+  draw();
+  const el = document.getElementById('graph-node-count');
+  if(el) el.textContent='Nodes: '+graphData.nodes.length+' | Edges: '+graphData.edges.length;
+}
+
+function initCanvas(){
+  const wrap = document.getElementById('graphcanvas');
+  if(!wrap) return;
+  wrap.innerHTML='<canvas id="gc" style="width:100%;height:100%;cursor:grab;display:block;"></canvas>';
+  const canvas = document.getElementById('gc');
+  canvas.width = wrap.offsetWidth || 580;
+  canvas.height = 460;
+  canvas.onmousedown = function(e) {
+    const pos = canvasPos(e, canvas);
+    const n = nodeAt(pos);
+    if(n){ dragNode=n; dragStart={x:pos.x-n.x, y:pos.y-n.y}; }
+    else { panStart={x:e.clientX-graphOffset.x, y:e.clientY-graphOffset.y}; canvas.style.cursor='grabbing'; }
+  };
+  canvas.onmousemove = function(e) {
+    if(dragNode){ const pos=canvasPos(e,canvas); dragNode.x=pos.x-dragStart.x; dragNode.y=pos.y-dragStart.y; draw(); }
+    else if(panStart){ graphOffset.x=e.clientX-panStart.x; graphOffset.y=e.clientY-panStart.y; draw(); }
+  };
+  canvas.onmouseup = function() { dragNode=null; dragStart=null; panStart=null; canvas.style.cursor='grab'; };
+  canvas.ondblclick = function() { graphZoom=1; graphOffset={x:0,y:0}; draw(); };
+  canvas.onwheel = function(e) { e.preventDefault(); graphZoom=Math.max(0.3,Math.min(3,graphZoom*(e.deltaY<0?1.1:0.9))); draw(); };
+}
+
+function canvasPos(e, canvas){
+  const r=canvas.getBoundingClientRect();
+  return {x:(e.clientX-r.left-graphOffset.x)/graphZoom, y:(e.clientY-r.top-graphOffset.y)/graphZoom};
+}
+
+function nodeAt(pos){
+  return graphData.nodes.find(function(n){ return Math.sqrt((n.x-pos.x)**2+(n.y-pos.y)**2)<20; });
+}
+
+function draw(){
+  const canvas=document.getElementById('gc');
+  if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.translate(graphOffset.x,graphOffset.y);
+  ctx.scale(graphZoom,graphZoom);
+  graphData.edges.forEach(function(e){
+    const s=graphData.nodes.find(function(n){ return n.id===e.source; });
+    const t=graphData.nodes.find(function(n){ return n.id===e.target; });
+    if(!s||!t) return;
+    ctx.beginPath(); ctx.moveTo(s.x,s.y); ctx.lineTo(t.x,t.y);
+    ctx.strokeStyle='rgba(148,163,184,0.4)'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.fillStyle='rgba(148,163,184,0.8)'; ctx.font='9px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(e.label||'', (s.x+t.x)/2, (s.y+t.y)/2-4);
+  });
+  graphData.nodes.forEach(function(n){
+    ctx.beginPath(); ctx.arc(n.x,n.y,16,0,Math.PI*2);
+    ctx.fillStyle=n.color||'#2563eb'; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(n.label||n.id, n.x, n.y+3);
+  });
+  ctx.restore();
+  if(graphAnimate) simulate();
+}
+
+function simulate(){
+  const k=80, rep=3000;
+  graphData.nodes.forEach(function(a){
+    graphData.nodes.forEach(function(b){
+      if(a===b) return;
+      const dx=a.x-b.x, dy=a.y-b.y, d=Math.max(1,Math.sqrt(dx*dx+dy*dy));
+      const f=rep/(d*d);
+      a.vx+=f*dx/d; a.vy+=f*dy/d;
+    });
+  });
+  graphData.edges.forEach(function(e){
+    const s=graphData.nodes.find(function(n){ return n.id===e.source; });
+    const t=graphData.nodes.find(function(n){ return n.id===e.target; });
+    if(!s||!t) return;
+    const dx=t.x-s.x, dy=t.y-s.y, d=Math.max(1,Math.sqrt(dx*dx+dy*dy));
+    const f=(d-k)*0.05;
+    s.vx+=f*dx/d; s.vy+=f*dy/d;
+    t.vx-=f*dx/d; t.vy-=f*dy/d;
+  });
+  graphData.nodes.forEach(function(n){ n.x+=n.vx*0.5; n.y+=n.vy*0.5; n.vx*=0.8; n.vy*=0.8; });
+  draw();
+  if(simulating) simTimer=requestAnimationFrame(simulate);
+}
+
+function toggleAnimate(){
+  if(graphAnimate){
+    graphAnimate=false; simulating=false; cancelAnimationFrame(simTimer);
+    document.getElementById('btn-animate').textContent='Animate';
+  } else {
+    graphAnimate=true; simulating=true; draw();
+    document.getElementById('btn-animate').textContent='Stop';
+  }
+}
+
+/* control room */
+let roomAgent=null, roomPoll=null;
+function openRoom(agentId){
+  const a=lastAgents.find(x=>x.agent_id===agentId);if(!a)return;
+  roomAgent=a;
+  $("r_av").textContent=initial(a.agent_id);
+  $("r_name").textContent=a.role_name||a.agent_id;
+  const cs=caps(a);
+  $("r_meta").textContent=`${a.status} · ${a.inference_models||"model n/a"}`;
+  $("r_cap").textContent=`routes to capability: ${cs[0]||"general"}${a.status!=="online"?" · agent offline, task will queue":""}`;
+  $("r_prompt").value="";$("r_out").classList.remove("show");$("r_result").textContent="";
+  $("r_send").disabled=false;
+  $("scrim").classList.add("show");
+  loadRoomModelOptions(a.inference_models||"");
+  setTimeout(()=>$("r_prompt").focus(),50);
+}
+async function loadRoomModelOptions(currentModel){
+  const sel=$("r_model_select");
+  sel.innerHTML='<option value="">Loading models…</option>';
+  const data=await tryJson("./api/models");
+  const models=(data && data.models) || [];
+  let html="";
+  models.forEach(m=>{
+    html+=`<option value="${esc(m)}"${m===currentModel?" selected":""}>${esc(m)}</option>`;
+  });
+  html+=`<option value="__custom__"${models.includes(currentModel)?"":" selected"}>Custom / other backend…</option>`;
+  sel.innerHTML=html;
+  const customInput=$("r_model_custom");
+  if(!models.includes(currentModel) && currentModel){
+    customInput.style.display="block";
+    customInput.value=currentModel;
+  } else {
+    customInput.style.display="none";
+    customInput.value="";
+  }
+}
+function onRoomModelSelectChange(){
+  const sel=$("r_model_select");
+  const customInput=$("r_model_custom");
+  if(sel.value==="__custom__"){
+    customInput.style.display="block";
+    customInput.focus();
+  } else {
+    customInput.style.display="none";
+  }
+}
+async function updateAgentModel(){
+  if(!roomAgent) return;
+  const sel=$("r_model_select");
+  const model = sel.value==="__custom__" ? $("r_model_custom").value.trim() : sel.value;
+  if(!model){ toast("Choose or enter a model first","err"); return; }
+  const btn=$("r_model_btn");
+  btn.disabled=true; btn.textContent="Assigning…";
+  const result=await tryJson(`./api/agents/${encodeURIComponent(roomAgent.agent_id)}/model`,
+    {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model})});
+  btn.disabled=false; btn.textContent="Assign";
+  if(!result || !result.ok){
+    toast("Could not assign model","err",(result&&result.detail)||"");
+    return;
+  }
+  $("r_meta").textContent=`${roomAgent.status} · ${result.model}`;
+  if(result.shared_backend && result.note){
+    toast("Model switched (shared backend)","ok",result.note);
+  } else if(result.note){
+    toast("Model label updated","ok",result.note);
+  } else {
+    toast("Model assigned","ok",result.model);
+  }
+  load();
+}
+function closeRoom(){$("scrim").classList.remove("show");if(roomPoll){clearInterval(roomPoll);roomPoll=null;}}
+async function sendRoom(){
+  if(!roomAgent)return;
+  const prompt=$("r_prompt").value.trim();
+  if(!prompt){toast("Type a task first","err");return;}  const cap=(caps(roomAgent)[0])||"general";
+  $("r_send").disabled=true;
+  $("r_out").classList.add("show");
+  $("r_status").innerHTML=`<span class="spin"></span>queued · routing to ${esc(cap)}`;
+  $("r_result").textContent="";
+  const created=await tryJson("./api/tasks",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({capability:cap,payload:{prompt}})});
+  if(!created||!created.id){$("r_status").textContent="failed to create task";$("r_send").disabled=false;toast("Could not create task","err");return;}  const id=created.id;
+  $("r_status").innerHTML=`<span class="spin"></span>task ${esc(id)} · working…`;
+  if(roomPoll)clearInterval(roomPoll);roomPoll=null;
+  let tries=0;
+  roomPoll=setInterval(async()=>{
+    tries++;
+    const t=await tryJson("./api/tasks/"+id);
+    if(!t){return;}    if(t.status==="done"){clearInterval(roomPoll);roomPoll=null;
+      $("r_status").textContent="✓ done · "+(t.assigned_agent||cap);
+      $("r_result").textContent=t.result||"(empty result)";$("r_send").disabled=false;}
+    else if(t.status==="failed"){clearInterval(roomPoll);roomPoll=null;
+      $("r_status").textContent="✕ failed";$("r_result").textContent=t.error||"(no error text)";$("r_send").disabled=false;}
+    else{$("r_status").innerHTML=`<span class="spin"></span>${esc(t.status)}${t.assigned_agent?" · "+esc(t.assigned_agent):""} · ${tries*2}s`;}    if(tries>150){clearInterval(roomPoll);roomPoll=null;$("r_status").textContent="timed out waiting (may still run server-side)";$("r_send").disabled=false;}
+  },2000);
+}
+
+/* insights (dream) */
+async function loadInsights(){
+  const doc=$("insightsdoc"); if(!doc) return;
+  doc.innerHTML='<div class="empty" style="padding:24px">Loading…</div>';
+  const data=await tryJson("./api/wiki/page?path="+encodeURIComponent("dream/latest.md"));
+  if(!data||data.markdown==null){
+    doc.innerHTML='<div class="empty" style="padding:24px">No Dream run yet.<br><span style="color:var(--dim)">The Dream engine runs nightly (~1am) and writes its recommendations here.</span></div>';
+    return;
+  }
+  doc.innerHTML='<div class="md">'+mdToHtml(data.markdown)+'</div>';
+}
+
+/* wiki */
+let wikiLoaded=false, wikiPages=[];
+async function loadWikiTree(){
+  const list=$("wikilist"); list.innerHTML='<div class="empty">Loading…</div>';
+  const data=await tryJson("./api/wiki/tree");
+  if(!data){ list.innerHTML='<div class="empty">Wiki API unreachable.</div>'; return; }
+  wikiPages=data.pages||[];
+  if(!wikiPages.length){
+    list.innerHTML='<div class="empty" style="padding:14px">No wiki mounted.<br><span style="color:var(--dim)">Add the wiki volume and restart the stack.</span></div>';
+    $("wikidoc").innerHTML='<div class="empty" style="padding:24px">Nothing to show yet.</div>'; return;
+  }
+  const groups={};
+  wikiPages.forEach(p=>{ const g=p.dir||"·"; (groups[g]=groups[g]||[]).push(p); });
+  const order=Object.keys(groups).sort((a,b)=> a==="·"?-1 : b==="·"?1 : a.localeCompare(b));
+  let html="";
+  order.forEach(g=>{
+    html+=`<div class="wgrp">${esc(g==="·"?"top level":g)}</div>`;
+    groups[g].sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
+      html+=`<div class="wlink" data-path="${esc(p.path)}" onclick="openWikiPage('${wlEsc(p.path)}')">${esc(p.name)}</div>`;
+    });
+  });
+  list.innerHTML=html;
+  const idx=wikiPages.find(p=>p.name==="index")||wikiPages.find(p=>p.name==="overview")||wikiPages[0];
+  if(idx) openWikiPage(idx.path);
+}
+async function openWikiPage(path){
+  document.querySelectorAll(".wlink").forEach(e=>e.classList.toggle("active",e.getAttribute("data-path")===path));
+  const doc=$("wikidoc"); doc.innerHTML='<div class="empty" style="padding:24px">Loading…</div>';
+  const data=await tryJson("./api/wiki/page?path="+encodeURIComponent(path));
+  if(!data||data.markdown==null){ doc.innerHTML='<div class="empty" style="padding:24px">Could not load that page.</div>'; return; }
+  doc.innerHTML='<div class="md">'+mdToHtml(data.markdown)+'</div>';
+  doc.scrollTop=0;
+}
+function openWikiByName(name){
+  name=String(name||"").trim();
+  const p=wikiPages.find(x=>x.name===name)||wikiPages.find(x=>x.name.toLowerCase()===name.toLowerCase());
+  if(p){ if(currentView!=="wiki") switchView("wiki"); openWikiPage(p.path); }
+  else toast("No wiki page named "+name,"err");
+}
+function wlEsc(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");}
+
+/* models */
+let modelsLoaded=false, modelSwitching=false;
+async function loadModels(){
+  const list=$("modelslist");
+  list.innerHTML='<div class="empty">Loading…</div>';
+  const data=await tryJson("./api/models");
+  if(!data){ list.innerHTML='<div class="empty">Models API unreachable.</div>'; return; }
+  const models=data.models||[];
+  $("modelcount").textContent = models.length ? "("+models.length+")" : "";
+  if(!models.length){
+    list.innerHTML='<div class="empty" style="padding:14px">No models registered in llama-swap.</div>';
+    return;
+  }
+  const activeModel = data.last_switched ? data.last_switched.model : null;
+  let html="";
+  if(data.last_switched){
+    html += `<div style="padding:6px 10px 12px;color:var(--dim);font-size:13px">Last switched here: <b>${esc(activeModel)}</b> at ${esc(new Date(data.last_switched.switched_at).toLocaleString())}</div>`;
+  } else {
+    html += `<div style="padding:6px 10px 12px;color:var(--dim);font-size:13px">No switches recorded from this dashboard yet — this list can't detect changes made another way (script, Hermes Settings panel, etc).</div>`;
+  }
+  models.forEach(m=>{
+    const isActive = m===activeModel;
+    html += `<div class="wlink" data-model="${esc(m)}" onclick="switchModel('${wlEsc(m)}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;${isActive?'font-weight:600;color:var(--accent);':''}">`
+          + `${isActive?'●':'○'} ${esc(m)}`
+          + `</div>`;
+  });
+  list.innerHTML=html;
+}
+async function switchModel(model){
+  if(modelSwitching) return;
+  modelSwitching=true;
+  const list=$("modelslist");
+  const prevHtml=list.innerHTML;
+  list.innerHTML=`<div class="empty">Switching to ${esc(model)}…</div>`;
+  const result=await tryJson("./api/models/switch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model})});
+  modelSwitching=false;
+  if(!result || !result.ok){
+    list.innerHTML=`<div class="empty" style="color:var(--failed)">Switch failed${result&&result.detail?': '+esc(result.detail):''}.</div>`;
+    toast("Model switch failed","err");
+    setTimeout(()=>{ list.innerHTML=prevHtml; }, 3000);
+    return;
+  }
+  toast("Switched to "+model,"ok");
+  modelsLoaded=false;
+  loadModels();
+}
+
+async function loadReliability(){
+  const tbody=$("reliabilityrows");
+  if(!tbody) return;
+  tbody.innerHTML='<tr><td colspan="6" class="empty">Loading…</td></tr>';
+  const data=await tryJson("./api/models/reliability");
+  if(!data || !data.stats){
+    tbody.innerHTML='<tr><td colspan="6" class="empty">Reliability API unreachable.</td></tr>';
+    if($("reliabilitycount")) $("reliabilitycount").textContent="";
+    return;
+  }
+  const stats=data.stats||[];
+  if($("reliabilitycount")) $("reliabilitycount").textContent = stats.length ? "("+stats.length+")" : "";
+  if(!stats.length){
+    tbody.innerHTML='<tr><td colspan="6" class="empty">No verified tasks yet — run a task with a verification_spec to start building this table.</td></tr>';
+    return;
+  }
+  tbody.innerHTML=stats.map(s=>{
+    const pct=(s.pass_rate*100).toFixed(1)+"%";
+    const rateColor = s.pass_rate>=0.8 ? "var(--done)" : s.pass_rate>=0.5 ? "var(--busy)" : "var(--failed)";
+    return `<tr>
+      <td>${esc(s.model)}</td>
+      <td class="mono">${esc(s.verification_type)}</td>
+      <td>${esc(s.passed)}</td>
+      <td>${esc(s.failed)}</td>
+      <td>${esc(s.total)}</td>
+      <td style="color:${rateColor};font-weight:650;">${pct}</td>
+    </tr>`;
+  }).join("");
+}
+
+/* task templates */
+let templatesLoaded=false, taskTemplates=[];
+async function loadTaskTemplates(){
+  const sel=$("templateSelect");
+  if(!sel) return;
+  const data=await tryJson("./api/task-templates");
+  taskTemplates=(data && data.templates) || [];
+  if(!taskTemplates.length){
+    sel.innerHTML='<option value="">No templates available</option>';
+    return;
+  }
+  sel.innerHTML='<option value="">Choose a template…</option>' +
+    taskTemplates.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("");
+}
+function onTemplateChange(){
+  const sel=$("templateSelect");
+  const id=sel.value;
+  const descEl=$("templateDesc");
+  const paramsEl=$("templateParams");
+  const btn=$("templateCreateBtn");
+  const t=taskTemplates.find(x=>x.id===id);
+  if(!t){
+    descEl.textContent=""; paramsEl.innerHTML=""; btn.disabled=true;
+    return;
+  }
+  descEl.textContent=t.description||"";
+  paramsEl.innerHTML=(t.params||[]).map(p=>`
+    <label style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);">
+      ${esc(p.label||p.name)}
+      <input type="${p.type==='integer'?'number':'text'}" id="tparam_${esc(p.name)}"
+        value="${esc(p.default!=null?p.default:'')}"
+        style="padding:6px 9px;background:var(--panel2);border:1px solid var(--border2);border-radius:7px;color:var(--text);font:inherit;font-size:12.5px;">
+    </label>`).join("");
+  btn.disabled=false;
+}
+async function createFromTemplate(){
+  const sel=$("templateSelect");
+  const id=sel.value;
+  const t=taskTemplates.find(x=>x.id===id);
+  if(!t) return;
+  const btn=$("templateCreateBtn");
+  btn.disabled=true;
+  const params={};
+  (t.params||[]).forEach(p=>{
+    const el=$("tparam_"+p.name);
+    params[p.name]=el?el.value:p.default;
+  });
+  const result=await tryJson("./api/tasks/from-template",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({template_id:id,params})});
+  btn.disabled=false;
+  if(!result || !result.id){
+    toast("Could not create task from template","err",(result&&result.detail)||"");
+    return;
+  }
+  toast("Task created from "+t.name,"ok",result.id);
+  sel.value=""; onTemplateChange();
+  load();
+}
+function mdInline(t){
+  t=t.replace(/`([^`]+)`/g,(m,c)=>`<code>${c}</code>`);
+  t=t.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,(m,p,l)=>`<a class="wl" onclick="openWikiByName('${wlEsc(p.trim())}')">${l}</a>`);
+  t=t.replace(/\[\[([^\]]+)\]\]/g,(m,p)=>`<a class="wl" onclick="openWikiByName('${wlEsc(p.trim())}')">${p}</a>`);
+  t=t.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(m,txt,url)=> /^https?:\/\//i.test(url)?`<a href="${url}" target="_blank" rel="noopener">${txt}</a>`:txt);
+  t=t.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
+  t=t.replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>");
+  return t;
+}
+function mdToHtml(md){
+  md=esc(md).replace(/\r\n/g,"\n");
+  const codes=[];
+  md=md.replace(/```([\s\S]*?)```/g,(m,c)=>{const body=c.replace(/^[^\n]*\n?/,"");codes.push(body);return "@@CODE"+(codes.length-1)+"@@";});
+  let fm="";
+  md=md.replace(/^---\n([\s\S]*?)\n---\n/,(m,c)=>{fm=`<div class="frontmatter">${c.trim()}</div>`;return"";});
+  const lines=md.split("\n"); let html=""; let i=0; let para=[];
+  const flush=()=>{ if(para.length){ html+="<p>"+mdInline(para.join(" "))+"</p>"; para=[]; } };
+  while(i<lines.length){
+    const ln=lines[i];
+    if(/^@@CODE\d+@@$/.test(ln.trim())){ flush(); html+="<pre><code>"+codes[+ln.trim().match(/\d+/)[0]]+"</code></pre>"; i++; continue; }
+    if(!ln.trim()){ flush(); i++; continue; }
+    const h=ln.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ flush(); const lv=h[1].length; html+=`<h${lv}>${mdInline(h[2])}</h${lv}>`; i++; continue; }
+    if(/^(---|\*\*\*|___)\s*$/.test(ln)){ flush(); html+="<hr>"; i++; continue; }
+    if(/^>\s?/.test(ln)){ flush(); const q=[]; while(i<lines.length&&/^>\s?/.test(lines[i])){q.push(lines[i].replace(/^>\s?/,""));i++;} html+=`<blockquote>${mdInline(q.join(" "))}</blockquote>`; continue; }
+    if(ln.includes("|")&&i+1<lines.length&&/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[i+1])){
+      flush();
+      const cell=r=>{const a=r.split("|").map(c=>c.trim()); if(a.length&&a[0]==="")a.shift(); if(a.length&&a[a.length-1]==="")a.pop(); return a;};
+      const head=cell(ln); i+=2; const rows=[];
+      while(i<lines.length&&lines[i].includes("|")&&lines[i].trim()){ rows.push(cell(lines[i])); i++; }
+      html+="<table><thead><tr>"+head.map(c=>`<th>${mdInline(c)}</th>`).join("")+"</tr></thead><tbody>"+        rows.map(r=>"<tr>"+r.map(c=>`<td>${mdInline(c)}</td>`).join("")+"</tr>").join("")+"</tbody></table>"; continue;
+    }
+    if(/^\s*[-*]\s+/.test(ln)){ flush(); const it=[]; while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i])){it.push(lines[i].replace(/^\s*[-*]\s+/,""));i++;} html+="<ul>"+it.map(x=>`<li>${mdInline(x)}</li>`).join("")+"</ul>"; continue; }
+    if(/^\s*\d+\.\s+/.test(ln)){ flush(); const it=[]; while(i<lines.length&&/^\s*\d+\.\s+/.test(lines[i])){it.push(lines[i].replace(/^\s*\d+\.\s+/,""));i++;} html+="<ol>"+it.map(x=>`<li>${mdInline(x)}</li>`).join("")+"</ol>"; continue; }
+    para.push(ln); i++;
+  }
+  flush();
+  return fm+html;
+}
+
+setInterval(()=>{load().catch(e=>console.error(e));},3000);
+
+</script>
+</body>
+</html>
