@@ -4,4 +4,3 @@ pydantic==2.9.2
 python-dotenv==1.0.1
 httpx
 attested==0.0.1
-attested==0.0.1
