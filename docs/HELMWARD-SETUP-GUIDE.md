@@ -11,8 +11,12 @@ Welcome! This guide walks you through setting up Helmward from a fresh clone to 
 Before you start, make sure you have:
 
 - **A Linux host** — a VM, LXC container, or bare metal running Debian 13 (or a
-  recent Debian/Ubuntu derivative), with `sudo`/root access. This is the
-  recommended and tested setup.
+  recent Debian/Ubuntu derivative), with root access (either via `sudo`, or by
+  being logged in as root directly — a minimal container image may not have
+  the `sudo` binary installed at all, and that's fine either way). This is
+  the recommended and tested setup.
+- **Git** — to clone this repo. Not preinstalled on every minimal image;
+  if `git --version` comes back empty, `apt-get install git` first.
 - **Claude Desktop** or **Claude Code CLI** — for orchestrating your agents via MCP
 - **Node.js 18+** — only needed for remote MCP access via `npx mcp-remote`
   (Step 3, Option B), or if you plan to run agent-side scripts locally
