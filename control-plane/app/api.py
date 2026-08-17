@@ -31,8 +31,8 @@ WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "") or None
 WIKI_DIR = os.environ.get("WIKI_DIR", "/app/wiki")
 
 # ── Inference model switching config ──────────────────────────────────────
-LLAMA_SWAP_URL = os.environ.get("LLAMA_SWAP_URL", "http://192.168.1.180:8081")
-HERMES_WEBUI_URL = os.environ.get("HERMES_WEBUI_URL", "http://192.168.1.147:8787")
+LLAMA_SWAP_URL = os.environ.get("LLAMA_SWAP_URL", "http://CHANGE-ME:8081")
+HERMES_WEBUI_URL = os.environ.get("HERMES_WEBUI_URL", "http://CHANGE-ME:8787")
 
 # Local record of the last model switched via THIS dashboard/API. Best-effort
 # only -- it does not detect model changes made through switch-model.ps1
@@ -80,7 +80,7 @@ def _update_agents_for_model_switch(model: str) -> list[str]:
     routes through this backend, not just whichever agent you happened to be
     looking at on the dashboard when you clicked switch. Confirmed in
     practice: apex-hermes and vibethinker both point at the same llama-swap
-    instance (192.168.1.180:8081), so switching to Ornith makes it the real
+    instance (see LLAMA_SWAP_URL), so switching to Ornith makes it the real
     active model for both, even though vibethinker's stored inference_models
     still said "vibethinker-3b" until this function runs.
 

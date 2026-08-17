@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """Generate knowledge graph data from wiki and session memories."""
 import json, os, re
@@ -34,11 +35,11 @@ for pid, plabel, pcolor in projects:
 
 # Add machines
 machines = [
-    ("ct201", "CT201\n192.168.1.147", "#0ea5e9"),
-    ("windows", "Windows Box\n192.168.1.180", "#0ea5e9"),
-    ("mac", "Mac M3 Pro\n192.168.1.128", "#0ea5e9"),
-    ("macmini", "Mac Mini\n192.168.1.234", "#0ea5e9"),
-    ("bazzite", "Bazzite\n192.168.1.139", "#0ea5e9"),
+    ("ct201", f"CT201\n{os.environ.get('CT201_IP', 'CHANGE-ME')}", "#0ea5e9"),
+    ("windows", f"Windows Box\n{os.environ.get('INFERENCE_HOST_IP', 'CHANGE-ME')}", "#0ea5e9"),
+    ("mac", f"Mac M3 Pro\n{os.environ.get('MAC_WORKER_IP', 'CHANGE-ME')}", "#0ea5e9"),
+    ("macmini", f"Mac Mini\n{os.environ.get('MACMINI_WORKER_IP', 'CHANGE-ME')}", "#0ea5e9"),
+    ("bazzite", f"Bazzite\n{os.environ.get('BAZZITE_WORKER_IP', 'CHANGE-ME')}", "#0ea5e9"),
 ]
 for mid, mlabel, mcolor in machines:
     add_node(mid, mlabel, "machine", mcolor)
