@@ -58,6 +58,10 @@ Apache 2.0. See [`LICENSE`](LICENSE).
 
 ## Support
 
-This is an open-source project. Issues and PRs welcome. If you'd like
-help customizing, extending, or running a managed instance, reach out
-through [Apex Solutions](https://github.com/jonrogers2015).
+This is an open-source project. Issues and PRs welcome.
+
+If you're self-hosting this and want it customized, extended, or run
+as a managed instance, that work happens through **Apex Solutions**
+-- verification-first document and data automation consulting, built
+on the same principle as the gate above: check the artifact, don't
+trust the claim. Reach out through [GitHub](https://github.com/jonrogers2015).
